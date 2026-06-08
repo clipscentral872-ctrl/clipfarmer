@@ -156,6 +156,24 @@ def main() -> int:
         produced += 1
 
     logger.info(f"[warehouse] done — {produced} clip(s) added to warehouse")
+
+    # If we tried but nothing succeeded, ping Chris so he knows the pipeline
+    # is blocked.  Respects quiet hours — the queue surfaces it at 15:00 SAST.
+    if produced == 0 and slots and 'failed_ids' in locals() and failed_ids:
+        try:
+            from publisher.telegram_gate import TelegramGate
+            gate = TelegramGate()
+            if gate.enabled:
+                gate.notify(
+                    "<b>📦 Warehouse producer ran but added 0 clips</b>\n"
+                    f"Tried {len(failed_ids)} campaign(s): "
+                    f"{', '.join('#' + str(i) for i in sorted(failed_ids)[:8])}"
+                    + ("..." if len(failed_ids) > 8 else "")
+                    + "\n<i>Likely causes: YouTube OAuth expired (blocks auto-find) "
+                    "or all campaigns need manually-pasted source URLs.</i>"
+                )
+        except Exception as e:
+            logger.warning(f"[warehouse] telegram notify failed: {e}")
     return 0
 
 
