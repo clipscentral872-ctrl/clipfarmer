@@ -110,9 +110,27 @@ def main() -> int:
                     )
                     failed_ids.add(campaign["id"])
                     continue
-                p = find_and_download_source(campaign)
+                # Find the URL first so we can tell Chris about it even if
+                # the cloud-IP download fails.  Mid-2025 YouTube blocks all
+                # cloud-IP downloads via SABR; the laptop hybrid covers it.
+                from engine.source_finder import find_source
+                pick = find_source(campaign)
+                if not pick:
+                    logger.warning(f"[warehouse] no source candidate for #{campaign['id']}")
+                    failed_ids.add(campaign["id"])
+                    continue
+                # Try to download from the cloud anyway (works for non-YT
+                # sources and for the day YouTube unblocks us again).
+                try:
+                    from engine.downloader import Downloader
+                    p = Downloader().download(pick.url)
+                except Exception as e:
+                    logger.warning(f"[warehouse] cloud-IP download failed for #{campaign['id']} {pick.url}: {e}")
+                    _remember_needed_source(campaign, pick)
+                    failed_ids.add(campaign["id"])
+                    continue
                 if not p or not p.exists():
-                    logger.warning(f"[warehouse] auto-find source failed for #{campaign['id']}")
+                    _remember_needed_source(campaign, pick)
                     failed_ids.add(campaign["id"])
                     continue
                 repo.set_campaign_current_source(campaign["id"], str(p))
@@ -157,24 +175,63 @@ def main() -> int:
 
     logger.info(f"[warehouse] done — {produced} clip(s) added to warehouse")
 
-    # If we tried but nothing succeeded, ping Chris so he knows the pipeline
-    # is blocked.  Respects quiet hours — the queue surfaces it at 15:00 SAST.
-    if produced == 0 and slots and 'failed_ids' in locals() and failed_ids:
-        try:
-            from publisher.telegram_gate import TelegramGate
-            gate = TelegramGate()
-            if gate.enabled:
-                gate.notify(
-                    "<b>📦 Warehouse producer ran but added 0 clips</b>\n"
-                    f"Tried {len(failed_ids)} campaign(s): "
-                    f"{', '.join('#' + str(i) for i in sorted(failed_ids)[:8])}"
-                    + ("..." if len(failed_ids) > 8 else "")
-                    + "\n<i>Likely causes: YouTube OAuth expired (blocks auto-find) "
-                    "or all campaigns need manually-pasted source URLs.</i>"
-                )
-        except Exception as e:
-            logger.warning(f"[warehouse] telegram notify failed: {e}")
+    # Tell Chris exactly which sources to feed from his laptop.  Respects
+    # quiet hours — surfaces at 15:00 SAST as a batched action list.
+    _telegram_needed_sources()
     return 0
+
+
+# --------------------------------------------------------------------- helpers
+
+_NEEDED_SOURCES: list[dict] = []
+
+
+def _remember_needed_source(campaign: dict, pick) -> None:
+    """Queue up a 'source needed' record so the post-run notifier can list
+    them all in a single Telegram message instead of one per campaign."""
+    _NEEDED_SOURCES.append({
+        "campaign_id": campaign["id"],
+        "campaign_title": campaign.get("title") or "?",
+        "url": getattr(pick, "url", "?"),
+        "video_title": getattr(pick, "title", "") or "",
+        "duration_min": round((getattr(pick, "duration_sec", 0) or 0) / 60, 1),
+    })
+
+
+def _telegram_needed_sources() -> None:
+    if not _NEEDED_SOURCES:
+        return
+    try:
+        from publisher.telegram_gate import TelegramGate
+    except Exception as e:
+        logger.warning(f"[warehouse] telegram import failed: {e}")
+        return
+    gate = TelegramGate()
+    if not gate.enabled:
+        return
+    lines = [
+        "<b>📦 Warehouse needs sources from your laptop</b>",
+        "<i>YouTube blocks cloud-IP downloads in 2025 — your laptop's residential IP downloads cleanly.</i>",
+        "",
+        "<b>Steps:</b>",
+        "  1. Open PowerShell, <code>cd C:\\Users\\chris\\clipfarmer</code>",
+        "  2. Run the command for each campaign below",
+        "  3. When done: <code>&amp; \"C:\\Program Files\\Git\\bin\\bash.exe\" deploy/bootstrap_github.sh</code>",
+        "",
+    ]
+    for n in _NEEDED_SOURCES[:8]:
+        title = (n["video_title"] or "?")[:80]
+        lines.append(
+            f"<b>#{n['campaign_id']} {n['campaign_title']}</b>\n"
+            f"  Video: <i>{title}</i> ({n['duration_min']} min)\n"
+            f"  <code>.\\.venv\\Scripts\\python.exe scripts\\feed_source.py {n['campaign_id']} {n['url']}</code>\n"
+        )
+    if len(_NEEDED_SOURCES) > 8:
+        lines.append(f"<i>(+{len(_NEEDED_SOURCES) - 8} more campaigns)</i>")
+    try:
+        gate.notify("\n".join(lines))
+    except Exception as e:
+        logger.warning(f"[warehouse] telegram notify failed: {e}")
 
 
 def _rank_eligible_campaigns(repo: Repository) -> list[dict]:
