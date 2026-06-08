@@ -87,6 +87,12 @@ class Downloader:
             # "Sign in to confirm you're not a bot" challenge.  Pass cookies
             # exported from Chris's signed-in browser if available.
             **_youtube_cookie_opts(source_url),
+            # Even with cookies, the YouTube *web* player JS challenge can
+            # fail on cloud runners and produce "Requested format is not
+            # available" because format extraction never returns anything.
+            # The android/ios player clients return formats directly without
+            # the n-sig challenge, so prefer them for cloud-based downloads.
+            **_youtube_extractor_args(source_url),
         }
 
         logger.info(f"[download] {source_url} → {source_id}.*")
@@ -158,3 +164,13 @@ def _youtube_cookie_opts(source_url: str) -> dict:
     if cookies_path.exists():
         return {"cookiefile": str(cookies_path)}
     return {}
+
+
+def _youtube_extractor_args(source_url: str) -> dict:
+    """Tell yt-dlp to use YouTube's android + ios player clients (no n-sig
+    JS challenge required), then fall back to the web client.  Avoids the
+    'Requested format is not available' that plagues web-only on cloud IPs."""
+    url = (source_url or "").lower()
+    if not ("youtube.com" in url or "youtu.be" in url):
+        return {}
+    return {"extractor_args": {"youtube": {"player_client": ["android", "ios", "web"]}}}
