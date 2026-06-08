@@ -34,6 +34,10 @@ def build_briefing(repo: Repository, hours_lookback: int = 24) -> str:
     parts: list[str] = []
     parts.append("<b>☕ Good morning Chris — your Brain's daily briefing</b>")
 
+    warehouse = _warehouse_status(repo)
+    if warehouse:
+        parts.append("\n" + warehouse)
+
     yest = _yesterday_summary(repo, hours_lookback)
     if yest:
         parts.append("\n" + yest)
@@ -51,6 +55,48 @@ def build_briefing(repo: Repository, hours_lookback: int = 24) -> str:
         parts.append("\n" + qual)
 
     return "\n".join(parts)
+
+
+def _warehouse_status(repo: Repository) -> str:
+    """One-line-per-day snapshot of the 3-day content buffer + a count of
+    clips currently waiting on Chris's review.  Lives at the top of the
+    briefing because it's the most actionable: if D+1 is short, the rest
+    of the day's plan can be adjusted; if review queue > 0, Chris knows
+    he's the bottleneck."""
+    try:
+        counts = repo.warehouse_counts_per_day(days_ahead=3)
+        TARGET = 6
+        with repo.conn() as c:
+            pending = c.execute(
+                "SELECT COUNT(*) AS n FROM clips WHERE warehouse_state='pending_review'"
+            ).fetchone()["n"]
+            approved = c.execute(
+                "SELECT COUNT(*) AS n FROM clips WHERE warehouse_state='approved'"
+            ).fetchone()["n"]
+    except Exception as e:
+        logger.warning(f"[briefing] warehouse status skipped: {e}")
+        return ""
+
+    def _bar(have: int, target: int = TARGET) -> str:
+        filled = min(have, target)
+        return ("█" * filled) + ("░" * max(0, target - filled))
+
+    lines = [
+        "<b>📦 Content warehouse (3-day buffer)</b>",
+        f"  Tomorrow (D+1): <code>{_bar(counts.get(1, 0))}</code> {counts.get(1, 0)}/{TARGET}",
+        f"  D+2:            <code>{_bar(counts.get(2, 0))}</code> {counts.get(2, 0)}/{TARGET}",
+        f"  D+3:            <code>{_bar(counts.get(3, 0))}</code> {counts.get(3, 0)}/{TARGET}",
+    ]
+    if pending:
+        lines.append(f"  <b>⏳ Awaiting your review: {pending}</b>")
+    if approved:
+        lines.append(f"  ✅ Approved, ready to post: {approved}")
+    if all(counts.get(d, 0) == 0 for d in (1, 2, 3)):
+        lines.append(
+            "  <i>⚠️ Warehouse empty — producer hasn't been able to add clips yet. "
+            "Often caused by expired YouTube OAuth blocking source auto-find.</i>"
+        )
+    return "\n".join(lines)
 
 
 def send(repo: Repository) -> None:
