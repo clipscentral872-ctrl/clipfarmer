@@ -37,13 +37,32 @@ class Downloader:
           - A `file://...` URL
           - A bare absolute path to an existing local video
 
-        Tries h264/mp4 first so FFmpeg downstream is happy. Falls back to
-        bestvideo+bestaudio if needed.
+        Routing:
+          - file paths      → return as-is
+          - youtube urls    → Cobalt API first (yt-dlp + SABR is broken on
+                              cloud IPs as of mid-2025); yt-dlp fallback
+          - everything else → yt-dlp
         """
         local = _resolve_local_path(source_url)
         if local is not None:
             logger.info(f"[download] using local file {local}")
             return local
+
+        # YouTube downloads go through Cobalt first.  yt-dlp on cloud-IP
+        # GitHub Actions runners hits YouTube's SABR force-routing and gets
+        # "Requested format is not available" on every video — Cobalt
+        # handles that server-side.  If Cobalt is down we fall through.
+        url_lower = (source_url or "").lower()
+        if "youtube.com" in url_lower or "youtu.be" in url_lower:
+            try:
+                from engine.cobalt_downloader import download_youtube, CobaltDownloadError
+                source_id = self._stable_id(source_url)
+                out_path = self.output_dir / f"{source_id}.mp4"
+                return download_youtube(source_url, out_path)
+            except CobaltDownloadError as e:
+                logger.warning(f"[download] Cobalt failed ({e}); trying yt-dlp")
+            except Exception as e:
+                logger.warning(f"[download] Cobalt errored ({e}); trying yt-dlp")
 
         try:
             from yt_dlp import YoutubeDL
