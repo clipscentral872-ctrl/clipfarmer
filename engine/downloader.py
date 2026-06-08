@@ -181,4 +181,8 @@ def _youtube_extractor_args(source_url: str) -> dict:
                 "player_client": ["tv", "tv_embedded"],
             },
         },
+        # Verbose so the workflow log shows which formats yt-dlp actually
+        # sees from each client — invaluable when SABR/PO Token changes
+        # break things again (and they will).
+        "verbose": True,
     }
