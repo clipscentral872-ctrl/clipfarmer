@@ -1,0 +1,38 @@
+name: Produce warehouse clips
+# Fills the 3-day content buffer.  Each 6h run adds up to PER_RUN_PRODUCE_CAP
+# clips for D+1 → D+2 → D+3 (whichever days are under target).  Cron offset
+# to :40 to avoid colliding with the other 6h jobs (:20, :30).
+
+on:
+  schedule:
+    - cron: '40 */6 * * *'   # 00:40, 06:40, 12:40, 18:40 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: clipfarmer-state
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  produce:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90      # transcribe + score + cut + format is slow on cold cache
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-clipfarmer
+        with:
+          state-key: ${{ secrets.STATE_ENCRYPTION_KEY }}
+          dotenv: ${{ secrets.CLIPFARMER_DOTENV }}
+
+      - name: Produce warehouse clips
+        run: python scripts/produce_warehouse.py
+
+      - name: Push state
+        if: always()
+        env:
+          STATE_ENCRYPTION_KEY: ${{ secrets.STATE_ENCRYPTION_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: bash deploy/state_push.sh

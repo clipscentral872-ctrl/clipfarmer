@@ -69,6 +69,20 @@ def _apply_additive_migrations(conn: sqlite3.Connection) -> None:
         # to the specific bet being tested.
         ("clips", "experiment_hypothesis", "TEXT"),
         ("clips", "experiment_params", "TEXT"),
+        # Content warehouse (3-day buffer per Chris's 2026-06-08 spec).
+        # Clips are produced N days ahead of their scheduled post slot,
+        # refined for ~48h, then surfaced to Chris for review 24h before
+        # going live. See scripts/produce_warehouse.py + refine_warehouse.py
+        # + promote_for_review.py for the lifecycle.
+        ("clips", "warehouse_state", "TEXT"),       # warehouse | refining | pending_review | approved | rejected | posted | discarded
+        ("clips", "scheduled_post_at", "TEXT"),     # ISO-8601 UTC; when this clip is slated to publish
+        ("clips", "refinement_count", "INTEGER DEFAULT 0"),
+        ("clips", "last_refined_at", "TEXT"),
+        ("clips", "review_sent_at", "TEXT"),        # when promoted to Chris's Telegram
+        ("clips", "review_token", "TEXT"),          # Telegram approval message token
+        ("clips", "reviewed_at", "TEXT"),
+        ("clips", "review_verdict", "TEXT"),        # approved | rejected
+        ("clips", "review_note", "TEXT"),           # Chris's rejection reason if any
     ]
     for table, col, coltype in additions:
         existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
@@ -273,6 +287,108 @@ class Repository:
             return c.execute(
                 "SELECT * FROM clips WHERE status = ? ORDER BY ai_score DESC", (status,)
             ).fetchall()
+
+    # ----- content warehouse (3-day buffer) ------------------------------
+    def warehouse_counts_per_day(self, days_ahead: int = 3) -> dict[int, int]:
+        """Return {day_offset: clip_count} for clips currently in the
+        warehouse (warehouse | refining | pending_review | approved). Used by
+        the producer to decide whether D+1 / D+2 / D+3 need topping up."""
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        counts: dict[int, int] = {d: 0 for d in range(1, days_ahead + 1)}
+        with self.conn() as c:
+            rows = c.execute(
+                "SELECT scheduled_post_at FROM clips "
+                "WHERE warehouse_state IN ('warehouse','refining','pending_review','approved') "
+                "AND scheduled_post_at IS NOT NULL"
+            ).fetchall()
+        for r in rows:
+            try:
+                t = datetime.fromisoformat(r["scheduled_post_at"].replace("Z", "+00:00"))
+            except Exception:
+                continue
+            offset = (t.date() - now.date()).days
+            if 1 <= offset <= days_ahead:
+                counts[offset] = counts.get(offset, 0) + 1
+        return counts
+
+    def warehouse_clips_for_refinement(self, max_passes: int = 3, min_hours_until_post: int = 24) -> list[sqlite3.Row]:
+        """Clips that should get another QA/Editor pass: still in warehouse,
+        scheduled to post more than `min_hours_until_post` ahead (so we don't
+        refine ones we're about to ship), and haven't hit the per-clip
+        refinement cap."""
+        from datetime import datetime, timezone, timedelta
+        cutoff = (datetime.now(timezone.utc) + timedelta(hours=min_hours_until_post)).isoformat()
+        with self.conn() as c:
+            return c.execute(
+                "SELECT * FROM clips "
+                "WHERE warehouse_state = 'warehouse' "
+                "AND (refinement_count IS NULL OR refinement_count < ?) "
+                "AND scheduled_post_at > ? "
+                "ORDER BY ai_score ASC, refinement_count ASC",   # weakest first
+                (max_passes, cutoff),
+            ).fetchall()
+
+    def warehouse_clips_due_for_review(self, within_hours: int = 24) -> list[sqlite3.Row]:
+        """Clips scheduled to post within the next N hours that haven't been
+        promoted to Chris's Telegram yet."""
+        from datetime import datetime, timezone, timedelta
+        cutoff = (datetime.now(timezone.utc) + timedelta(hours=within_hours)).isoformat()
+        with self.conn() as c:
+            return c.execute(
+                "SELECT * FROM clips "
+                "WHERE warehouse_state IN ('warehouse','refining') "
+                "AND scheduled_post_at IS NOT NULL "
+                "AND scheduled_post_at <= ? "
+                "ORDER BY scheduled_post_at ASC",
+                (cutoff,),
+            ).fetchall()
+
+    def warehouse_approved_clip_for_slot(self, slot_start_iso: str, slot_end_iso: str) -> Optional[sqlite3.Row]:
+        """Find one approved clip slated to post within this slot's window.
+        Returns None if the warehouse is empty for the slot — slot script
+        then falls back to producing fresh."""
+        with self.conn() as c:
+            return c.execute(
+                "SELECT * FROM clips "
+                "WHERE warehouse_state = 'approved' "
+                "AND scheduled_post_at BETWEEN ? AND ? "
+                "ORDER BY ai_score DESC LIMIT 1",
+                (slot_start_iso, slot_end_iso),
+            ).fetchone()
+
+    def mark_clip_warehoused(self, clip_id: int, scheduled_post_at: str) -> None:
+        self.set_clip_field(
+            clip_id,
+            warehouse_state="warehouse",
+            scheduled_post_at=scheduled_post_at,
+            refinement_count=0,
+        )
+
+    def mark_clip_refined(self, clip_id: int) -> None:
+        with self.conn() as c:
+            c.execute(
+                "UPDATE clips SET refinement_count = COALESCE(refinement_count,0)+1, "
+                "last_refined_at = ? WHERE id = ?",
+                (_now(), clip_id),
+            )
+
+    def mark_clip_review_sent(self, clip_id: int, token: str) -> None:
+        self.set_clip_field(
+            clip_id,
+            warehouse_state="pending_review",
+            review_sent_at=_now(),
+            review_token=token,
+        )
+
+    def mark_clip_reviewed(self, clip_id: int, verdict: str, note: str = "") -> None:
+        self.set_clip_field(
+            clip_id,
+            warehouse_state=verdict,    # 'approved' or 'rejected'
+            reviewed_at=_now(),
+            review_verdict=verdict,
+            review_note=note,
+        )
 
     # ----- posts ---------------------------------------------------------
     def add_post(self, clip_id: int, platform: str, scheduled_for: Optional[str], caption: str, hashtags: Iterable[str]) -> int:

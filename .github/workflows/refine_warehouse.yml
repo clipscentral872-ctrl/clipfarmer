@@ -1,0 +1,39 @@
+name: Refine warehouse clips
+# Improves D+2 / D+3 clips while they sit (additional QA + Editor passes).
+# Skips anything within 24h of its post slot — by that point it's been
+# promoted for Chris's review and shouldn't be changed under him.
+
+on:
+  schedule:
+    - cron: '55 3,9,15,21 * * *'   # 03:55, 09:55, 15:55, 21:55 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: clipfarmer-state
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  refine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-clipfarmer
+        with:
+          state-key: ${{ secrets.STATE_ENCRYPTION_KEY }}
+          dotenv: ${{ secrets.CLIPFARMER_DOTENV }}
+          install-playwright: 'false'   # no browser; Claude-only refinement
+
+      - name: Refine warehouse clips
+        run: python scripts/refine_warehouse.py
+
+      - name: Push state
+        if: always()
+        env:
+          STATE_ENCRYPTION_KEY: ${{ secrets.STATE_ENCRYPTION_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: bash deploy/state_push.sh

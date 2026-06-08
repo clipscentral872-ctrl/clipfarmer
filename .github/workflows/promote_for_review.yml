@@ -1,0 +1,44 @@
+name: Promote D+1 clips for review
+# Fires once a day at 13:05 UTC (15:05 SAST — right after telegram_flush at
+# 13:00).  Walks every warehouse clip scheduled to post in the next 24h,
+# sends each to Chris's Telegram, and waits up to 30 minutes per clip for
+# his /approve or /reject.  Anything he doesn't decide on stays in
+# pending_review for tomorrow's run.
+
+on:
+  schedule:
+    - cron: '5 13 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: clipfarmer-state
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    # Worst case: PER_RUN_REVIEW_CAP × APPROVAL_WAIT_MINUTES = 8 × 30 = 240 min.
+    # Cap below that so the workflow doesn't tie up the state branch forever
+    # if Chris is genuinely afk.
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-clipfarmer
+        with:
+          state-key: ${{ secrets.STATE_ENCRYPTION_KEY }}
+          dotenv: ${{ secrets.CLIPFARMER_DOTENV }}
+          install-playwright: 'false'
+
+      - name: Promote D+1 clips for review
+        run: python scripts/promote_for_review.py
+
+      - name: Push state
+        if: always()
+        env:
+          STATE_ENCRYPTION_KEY: ${{ secrets.STATE_ENCRYPTION_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: bash deploy/state_push.sh
