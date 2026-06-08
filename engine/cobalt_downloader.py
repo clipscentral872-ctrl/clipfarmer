@@ -38,6 +38,52 @@ class CobaltDownloadError(RuntimeError):
     pass
 
 
+class PytubefixDownloadError(RuntimeError):
+    pass
+
+
+def download_youtube_pytubefix(source_url: str, output_path: Path) -> Path:
+    """Try pytubefix — independent of yt-dlp, sometimes works on cloud IPs
+    where yt-dlp is SABR-blocked.  Picks the highest-resolution progressive
+    stream so we get one file with audio baked in (no merge needed)."""
+    try:
+        from pytubefix import YouTube
+    except ImportError as e:
+        raise PytubefixDownloadError("pytubefix not installed") from e
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        yt = YouTube(source_url)
+        # progressive=True streams contain both audio+video in one file
+        # (capped at 720p) — simpler than the adaptive merge dance.
+        stream = (
+            yt.streams.filter(progressive=True, file_extension="mp4")
+            .order_by("resolution")
+            .desc()
+            .first()
+        )
+        if stream is None:
+            # Fall back to highest-res adaptive video (no audio) — better
+            # than nothing; ffmpeg downstream can still cut from it.
+            stream = (
+                yt.streams.filter(adaptive=True, file_extension="mp4", only_video=True)
+                .order_by("resolution")
+                .desc()
+                .first()
+            )
+        if stream is None:
+            raise PytubefixDownloadError("no usable stream found")
+        downloaded = stream.download(
+            output_path=str(output_path.parent),
+            filename=output_path.name,
+            skip_existing=False,
+        )
+        logger.info(f"[pytubefix] saved {output_path.name} ({Path(downloaded).stat().st_size:,} bytes)")
+        return Path(downloaded)
+    except Exception as e:
+        raise PytubefixDownloadError(f"pytubefix failed: {e}") from e
+
+
 def download_youtube(source_url: str, output_path: Path, timeout: int = 600) -> Path:
     """Download a YouTube video via Cobalt.  Returns the output Path on success.
     Raises CobaltDownloadError if every instance fails.

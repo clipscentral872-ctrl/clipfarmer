@@ -48,21 +48,33 @@ class Downloader:
             logger.info(f"[download] using local file {local}")
             return local
 
-        # YouTube downloads go through Cobalt first.  yt-dlp on cloud-IP
-        # GitHub Actions runners hits YouTube's SABR force-routing and gets
-        # "Requested format is not available" on every video — Cobalt
-        # handles that server-side.  If Cobalt is down we fall through.
+        # YouTube on cloud-IP GitHub Actions runners is gated by SABR +
+        # PO Token, which yt-dlp can't bypass without a residential IP or
+        # external token server.  We try a sequence of independent extractors:
+        #   1. pytubefix — own extractor, sometimes works where yt-dlp doesn't
+        #   2. Cobalt    — community service, currently mostly auth-gated
+        #   3. yt-dlp    — last resort, expected to fail on cloud IPs
         url_lower = (source_url or "").lower()
         if "youtube.com" in url_lower or "youtu.be" in url_lower:
+            source_id = self._stable_id(source_url)
+            out_path = self.output_dir / f"{source_id}.mp4"
             try:
-                from engine.cobalt_downloader import download_youtube, CobaltDownloadError
-                source_id = self._stable_id(source_url)
-                out_path = self.output_dir / f"{source_id}.mp4"
-                return download_youtube(source_url, out_path)
-            except CobaltDownloadError as e:
-                logger.warning(f"[download] Cobalt failed ({e}); trying yt-dlp")
+                from engine.cobalt_downloader import (
+                    download_youtube,
+                    download_youtube_pytubefix,
+                    CobaltDownloadError,
+                    PytubefixDownloadError,
+                )
+                try:
+                    return download_youtube_pytubefix(source_url, out_path)
+                except PytubefixDownloadError as e:
+                    logger.warning(f"[download] pytubefix failed ({e}); trying Cobalt")
+                try:
+                    return download_youtube(source_url, out_path)
+                except CobaltDownloadError as e:
+                    logger.warning(f"[download] Cobalt failed ({e}); trying yt-dlp")
             except Exception as e:
-                logger.warning(f"[download] Cobalt errored ({e}); trying yt-dlp")
+                logger.warning(f"[download] alt downloaders errored ({e}); trying yt-dlp")
 
         try:
             from yt_dlp import YoutubeDL

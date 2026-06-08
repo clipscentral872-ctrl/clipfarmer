@@ -18,6 +18,10 @@ torch
 # (SABR streaming, PO Tokens, etc.).  Pin to a recent floor and let pip
 # pick the latest available so cloud-IP downloads keep working.
 yt-dlp>=2026.05.20
+# pytubefix is an independent YouTube downloader (not yt-dlp).  Uses a
+# different extraction approach; sometimes works on cloud IPs where yt-dlp
+# is blocked by SABR.
+pytubefix>=8.0
 ffmpeg-python>=0.2
 
 # --- Platform SDKs ----------------------------------------------------
