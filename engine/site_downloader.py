@@ -62,7 +62,7 @@ def download_via_site(source_url: str, output_path: Path, timeout: int = 600) ->
 
         mp4_url: Optional[str] = None
         last_err: Optional[Exception] = None
-        for site_fn in (_try_savetube, _try_yt5s, _try_ssyoutube):
+        for site_fn in (_try_ytmp3gg, _try_savetube, _try_yt5s, _try_ssyoutube):
             try:
                 mp4_url = site_fn(page, source_url)
                 if mp4_url:
@@ -93,6 +93,46 @@ def download_via_site(source_url: str, output_path: Path, timeout: int = 600) ->
 
 
 # --------------------------------------------------------------------- sites
+
+def _try_ytmp3gg(page, youtube_url: str) -> Optional[str]:
+    """ytmp3.gg — clean UI, has MP4 1080p toggle and a copyright checkbox.
+    Tested live mid-2025."""
+    page.goto("https://ytmp3.gg/", wait_until="domcontentloaded", timeout=30_000)
+    # Paste URL
+    inp = page.locator('input[placeholder*="Paste" i], input[type="text"]').first
+    inp.wait_for(state="visible", timeout=10_000)
+    inp.fill(youtube_url)
+    # Switch to MP4
+    try:
+        page.locator("button:has-text('MP4'), label:has-text('MP4')").first.click(timeout=3_000)
+    except Exception:
+        pass
+    # Accept the copyright checkbox if present
+    try:
+        cb = page.locator('input[type="checkbox"]').first
+        if cb.count() > 0:
+            cb.check(timeout=2_000)
+    except Exception:
+        pass
+    # Convert
+    page.locator("button:has-text('Convert')").first.click(timeout=5_000)
+    # Wait for result — the site shows a "Download" anchor when ready (~10-30s)
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        for sel in (
+            "a:has-text('Download'):not([href=''])",
+            "a[href*='.mp4']",
+            "a[download]",
+        ):
+            try:
+                href = page.locator(sel).first.get_attribute("href", timeout=1_500)
+                if href and "http" in href and ".mp4" in href.lower():
+                    return href
+            except Exception:
+                continue
+        time.sleep(2)
+    return None
+
 
 def _try_savetube(page, youtube_url: str) -> Optional[str]:
     """savetube.me — Vue.js single-page-app; type URL → click Download → MP4 buttons."""
