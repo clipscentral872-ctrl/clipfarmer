@@ -167,10 +167,20 @@ def _youtube_cookie_opts(source_url: str) -> dict:
 
 
 def _youtube_extractor_args(source_url: str) -> dict:
-    """Tell yt-dlp to use YouTube's android + ios player clients (no n-sig
-    JS challenge required), then fall back to the web client.  Avoids the
-    'Requested format is not available' that plagues web-only on cloud IPs."""
+    """Tell yt-dlp to use YouTube's web_safari + mweb clients (current most
+    reliable on cloud IPs as of 2025-06; android client was deprecated by
+    YouTube around 2024-08), plus skip the JS challenge entirely so we don't
+    need n-sig decoding.  Verbose mode prints the actual format list so we
+    can diagnose why downloads fail."""
     url = (source_url or "").lower()
     if not ("youtube.com" in url or "youtu.be" in url):
         return {}
-    return {"extractor_args": {"youtube": {"player_client": ["android", "ios", "web"]}}}
+    return {
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["web_safari", "mweb", "tv_embedded"],
+                "player_skip": ["webpage"],
+            },
+        },
+        "verbose": True,
+    }
