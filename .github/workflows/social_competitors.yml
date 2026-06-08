@@ -1,0 +1,37 @@
+name: Social competitor refresh
+# Hits real YT / TT / IG app interfaces for current trending clips per active
+# campaign topic.  Heavy enough to deserve its own daily slot.
+
+on:
+  schedule:
+    - cron: '0 10 * * *'    # 10:00 UTC = 06:00 ET = 12:00 SAST
+  workflow_dispatch:
+
+concurrency:
+  group: clipfarmer-state
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  social:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-clipfarmer
+        with:
+          state-key: ${{ secrets.STATE_ENCRYPTION_KEY }}
+          dotenv: ${{ secrets.CLIPFARMER_DOTENV }}
+
+      - name: Refresh social competitors
+        run: python scripts/refresh_social_competitors.py
+
+      - name: Push state
+        if: always()
+        env:
+          STATE_ENCRYPTION_KEY: ${{ secrets.STATE_ENCRYPTION_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: bash deploy/state_push.sh

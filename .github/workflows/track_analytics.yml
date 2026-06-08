@@ -1,0 +1,38 @@
+name: Track analytics
+# Refresh engagement data for posted clips so the brain can attribute outcomes.
+# Every 4 hours.
+
+on:
+  schedule:
+    - cron: '45 */4 * * *'   # 00:45, 04:45, 08:45, 12:45, 16:45, 20:45 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: clipfarmer-state
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  track:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-clipfarmer
+        with:
+          state-key: ${{ secrets.STATE_ENCRYPTION_KEY }}
+          dotenv: ${{ secrets.CLIPFARMER_DOTENV }}
+          install-playwright: 'false'   # uses YT/TT/IG APIs, no browser
+
+      - name: Track analytics
+        run: python scripts/track_analytics.py
+
+      - name: Push state
+        if: always()
+        env:
+          STATE_ENCRYPTION_KEY: ${{ secrets.STATE_ENCRYPTION_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: bash deploy/state_push.sh

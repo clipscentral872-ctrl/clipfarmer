@@ -1,0 +1,37 @@
+name: 48hr Whop screenshot reminders
+# Hourly check for posts that have crossed the 48hr Whop analytics window and
+# need their stats screenshotted + sent to the campaign support chat.
+
+on:
+  schedule:
+    - cron: '50 * * * *'   # hourly @ :50 (offset from opportunity_scan at :15)
+  workflow_dispatch:
+
+concurrency:
+  group: clipfarmer-state
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-clipfarmer
+        with:
+          state-key: ${{ secrets.STATE_ENCRYPTION_KEY }}
+          dotenv: ${{ secrets.CLIPFARMER_DOTENV }}
+
+      - name: 48hr screenshot reminders
+        run: python scripts/notify_48hr_screenshots.py
+
+      - name: Push state
+        if: always()
+        env:
+          STATE_ENCRYPTION_KEY: ${{ secrets.STATE_ENCRYPTION_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: bash deploy/state_push.sh

@@ -1,0 +1,38 @@
+name: Weekly brain reflection
+# Self-critique: Director EV calibration + AI score correlation.  Runs once a
+# week (Sunday) so the brain spots its own systemic mistakes.
+
+on:
+  schedule:
+    - cron: '30 3 * * 0'    # Sun 03:30 UTC = Sun 05:30 SAST
+  workflow_dispatch:
+
+concurrency:
+  group: clipfarmer-state
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  reflect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-clipfarmer
+        with:
+          state-key: ${{ secrets.STATE_ENCRYPTION_KEY }}
+          dotenv: ${{ secrets.CLIPFARMER_DOTENV }}
+          install-playwright: 'false'
+
+      - name: Brain reflection
+        run: python scripts/brain_reflection.py
+
+      - name: Push state
+        if: always()
+        env:
+          STATE_ENCRYPTION_KEY: ${{ secrets.STATE_ENCRYPTION_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: bash deploy/state_push.sh

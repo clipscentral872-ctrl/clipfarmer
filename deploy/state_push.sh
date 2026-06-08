@@ -21,7 +21,10 @@ log() { echo -e "\033[1;36m[state-push]\033[0m $*"; }
 # What we persist.  Videos in data/clips/ and data/downloads/ are NOT
 # persisted — they're ephemeral and can be regenerated.
 ITEMS=()
-[[ -f clipfarmer.db ]] && ITEMS+=(clipfarmer.db)
+[[ -f data/clipfarmer.db ]] && ITEMS+=(data/clipfarmer.db)
+[[ -f data/clipfarmer.db-journal ]] && ITEMS+=(data/clipfarmer.db-journal)
+# Briefs Markdown files are learning artefacts — small, worth persisting.
+[[ -d data/briefs ]] && ITEMS+=(data/briefs)
 [[ -d .auth ]] && ITEMS+=(.auth)
 # Keep the last week of logs for debugging — strict size budget
 if [[ -d logs ]]; then
