@@ -53,7 +53,11 @@ class Downloader:
         source_id = self._stable_id(source_url)
         outtmpl = str(self.output_dir / f"{source_id}.%(ext)s")
 
-        fmt = "bv*[ext=mp4][vcodec~='^(avc|h264)']+ba[ext=m4a]/best[ext=mp4]/best" if prefer_mp4 else "best"
+        # Format selection: take ANY best video + best audio, let yt-dlp
+        # remux to mp4 via merge_output_format below.  The strict
+        # h264-only filter we used to have breaks on modern YouTube videos
+        # served only as VP9/AV1 — by 2025 that's the majority.
+        fmt = "bv*+ba/best" if prefer_mp4 else "best"
 
         # yt-dlp shells out to ffmpeg to merge audio+video; it only looks
         # at PATH unless we point it explicitly. Use the parent directory
