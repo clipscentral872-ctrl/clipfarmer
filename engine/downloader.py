@@ -79,6 +79,10 @@ class Downloader:
                     "Chrome/127.0.0.0 Safari/537.36"
                 )
             },
+            # YouTube on datacenter IPs (GitHub Actions runners) gets the
+            # "Sign in to confirm you're not a bot" challenge.  Pass cookies
+            # exported from Chris's signed-in browser if available.
+            **_youtube_cookie_opts(source_url),
         }
 
         logger.info(f"[download] {source_url} → {source_id}.*")
@@ -131,3 +135,22 @@ def _stable_id(source_url: str) -> str:
     if m:
         return f"{m.group(1)}_{h}"
     return f"src_{h}"
+
+
+def _youtube_cookie_opts(source_url: str) -> dict:
+    """Return `{"cookiefile": "<path>"}` when downloading from YouTube AND a
+    cookies file is present on disk.  Other domains don't need the cookie
+    because the bot-block is YouTube-specific.
+
+    Setup: export YouTube cookies from a signed-in browser session (the
+    `Get cookies.txt LOCALLY` Chrome/Firefox extension is the standard tool),
+    save the file to `.auth/youtube-cookies.txt` in the project root, and
+    commit it to the encrypted state branch via the next bootstrap.
+    """
+    url = (source_url or "").lower()
+    if not ("youtube.com" in url or "youtu.be" in url):
+        return {}
+    cookies_path = settings.project_root / ".auth" / "youtube-cookies.txt"
+    if cookies_path.exists():
+        return {"cookiefile": str(cookies_path)}
+    return {}

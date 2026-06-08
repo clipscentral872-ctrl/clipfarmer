@@ -185,6 +185,17 @@ def _naive_query(campaign: dict, structured: dict) -> str:
 
 
 # ----------------------------------------------------------------------
+def _youtube_search_cookie_opts() -> dict:
+    """Pass YouTube cookies to yt-dlp search/list calls when present so
+    GitHub Actions runners don't trip the bot challenge.  See
+    `engine.downloader._youtube_cookie_opts` for the matching download-side
+    helper and the .auth/youtube-cookies.txt setup."""
+    cookies_path = settings.project_root / ".auth" / "youtube-cookies.txt"
+    if cookies_path.exists():
+        return {"cookiefile": str(cookies_path)}
+    return {}
+
+
 def _search_youtube(query: str, n: int) -> List[SourceCandidate]:
     """Run yt-dlp ytsearch and parse the JSON metadata."""
     try:
@@ -198,6 +209,7 @@ def _search_youtube(query: str, n: int) -> List[SourceCandidate]:
         "extract_flat": True,  # don't fetch each video, just list
         "skip_download": True,
         "noplaylist": True,
+        **_youtube_search_cookie_opts(),
     }
     out: List[SourceCandidate] = []
     try:
