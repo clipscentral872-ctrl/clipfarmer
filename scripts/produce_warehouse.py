@@ -75,11 +75,21 @@ def main() -> int:
     from orchestrator import produce_clips_for_campaign, _ensure_clip_in_db
     from engine.source_finder import find_and_download_source, _parse_structured_rules
 
+    # Pull the eligible campaign pool ONCE and iterate.  pick_next_campaign_by_ev
+    # is deterministic — calling it in a loop returns the same #1 every time.
+    candidates = _rank_eligible_campaigns(repo)
+    if not candidates:
+        logger.warning("[warehouse] no eligible campaigns — stopping")
+        return 0
+    logger.info(f"[warehouse] {len(candidates)} eligible candidate(s) in EV order: " +
+                ", ".join(f"#{c['id']}" for c in candidates[:5]))
+
+    failed_ids: set[int] = set()
     produced = 0
     for slot_at in slots:
-        campaign = pick_next_campaign_by_ev(repo)
+        campaign = _next_unfailed(candidates, failed_ids)
         if not campaign:
-            logger.warning("[warehouse] no eligible campaign — stopping")
+            logger.warning("[warehouse] every eligible campaign failed source resolution — stopping")
             break
 
         # Ensure a downloadable source exists (same flow as runner.run_one_slot)
@@ -90,10 +100,12 @@ def main() -> int:
                 logger.warning(
                     f"[warehouse] campaign #{campaign['id']} needs source matching {must_match} — skipping"
                 )
+                failed_ids.add(campaign["id"])
                 continue
             p = find_and_download_source(campaign)
             if not p or not p.exists():
-                logger.warning(f"[warehouse] auto-find source failed for #{campaign['id']}")
+                logger.warning(f"[warehouse] auto-find source failed for #{campaign['id']} — excluding from this run")
+                failed_ids.add(campaign["id"])
                 continue
             repo.set_campaign_current_source(campaign["id"], str(p))
             source_path = str(p)
@@ -102,9 +114,11 @@ def main() -> int:
             clips = produce_clips_for_campaign(campaign, source_path, n_clips=1)
         except Exception as e:
             logger.exception(f"[warehouse] producer crashed on #{campaign['id']}: {e}")
+            failed_ids.add(campaign["id"])
             continue
         if not clips:
             logger.info(f"[warehouse] engine produced 0 clips for #{campaign['id']}")
+            failed_ids.add(campaign["id"])
             continue
 
         clip = clips[0]
@@ -127,6 +141,50 @@ def main() -> int:
 
     logger.info(f"[warehouse] done — {produced} clip(s) added to warehouse")
     return 0
+
+
+def _rank_eligible_campaigns(repo: Repository) -> list[dict]:
+    """All active campaigns sorted by EV descending.  Filters on the same
+    rules as pick_next_campaign_by_ev (budget %, quota, source-or-findable,
+    SKIP_TIKTOK) but returns the FULL list so the warehouse can fall through
+    to the next-best when one fails."""
+    import os
+    from config import settings
+    from scheduler.profit_ranker import score_campaign, _campaign_requires_tiktok
+    from scheduler.quota import daily_quota_for_campaign, daily_clip_count, _has_source_or_can_find
+
+    floor = settings.min_budget_remaining_pct
+    skip_tiktok = (os.environ.get("SKIP_TIKTOK", "").lower() in ("1", "true", "yes", "on"))
+    with repo.conn() as c:
+        rows = c.execute(
+            "SELECT * FROM campaigns "
+            "WHERE (status IS NULL OR status='active') "
+            "AND (budget_remaining_pct IS NULL OR budget_remaining_pct >= ?)",
+            (floor,),
+        ).fetchall()
+    eligible: list[tuple[float, dict]] = []
+    for row in rows:
+        camp = dict(row)
+        quota = daily_quota_for_campaign(camp)
+        if quota <= 0:
+            continue
+        if daily_clip_count(repo, camp["id"]) >= quota:
+            continue
+        if not _has_source_or_can_find(camp):
+            continue
+        if skip_tiktok and _campaign_requires_tiktok(camp):
+            continue
+        s = score_campaign(repo, camp)
+        eligible.append((s["ev_usd"], camp))
+    eligible.sort(key=lambda t: t[0], reverse=True)
+    return [c for _ev, c in eligible]
+
+
+def _next_unfailed(candidates: list[dict], failed_ids: set[int]) -> dict | None:
+    for c in candidates:
+        if c["id"] not in failed_ids:
+            return c
+    return None
 
 
 if __name__ == "__main__":
