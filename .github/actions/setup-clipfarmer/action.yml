@@ -1,0 +1,53 @@
+name: Setup clipfarmer
+description: Pull encrypted state, write .env, set up Python + Playwright.
+inputs:
+  state-key:
+    description: STATE_ENCRYPTION_KEY secret value
+    required: true
+  dotenv:
+    description: Full .env file contents, stored as a single multi-line GitHub Secret
+    required: true
+  install-playwright:
+    description: Whether to install Playwright Chromium (slower; only needed for scanners/publisher)
+    required: false
+    default: 'true'
+runs:
+  using: composite
+  steps:
+    - name: Pull state from `state` branch
+      shell: bash
+      env:
+        STATE_ENCRYPTION_KEY: ${{ inputs.state-key }}
+      run: bash deploy/state_pull.sh
+
+    - name: Restore .env from secret
+      shell: bash
+      env:
+        CLIPFARMER_DOTENV: ${{ inputs.dotenv }}
+      run: |
+        printf '%s' "$CLIPFARMER_DOTENV" > .env
+        echo "wrote .env ($(wc -l < .env) lines)"
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+        cache: pip
+
+    - name: Install Python dependencies
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip wheel
+        pip install -r requirements.txt
+
+    - name: Cache Playwright browsers
+      if: inputs.install-playwright == 'true'
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/ms-playwright
+        key: playwright-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+
+    - name: Install Playwright Chromium
+      if: inputs.install-playwright == 'true'
+      shell: bash
+      run: playwright install --with-deps chromium

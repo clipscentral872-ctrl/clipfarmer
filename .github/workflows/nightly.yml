@@ -1,0 +1,86 @@
+name: Nightly brain + scrapes
+# Runs the full nightly learning + housekeeping pipeline as one workflow so
+# the order is explicit and we don't burn 12 separate runners on jobs that
+# all want the same state branch sequentially anyway.
+# Time: ~02:00 SAST / ~00:00 UTC.  Avoids Chris's active 15:00-21:30 window.
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: clipfarmer-state
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  nightly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240    # 4h — generous, deep-competitor pass is the longest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-clipfarmer
+        with:
+          state-key: ${{ secrets.STATE_ENCRYPTION_KEY }}
+          dotenv: ${{ secrets.CLIPFARMER_DOTENV }}
+
+      # Run each step `continue-on-error` so one failure doesn't kill the chain.
+      - name: Refresh top performers
+        continue-on-error: true
+        run: python scripts/refresh_top_performers.py
+
+      - name: Scan Clipify directory
+        continue-on-error: true
+        run: python scripts/scan_clipify_directory.py
+
+      - name: Aggregate per-campaign learnings
+        continue-on-error: true
+        run: python scripts/refresh_learnings.py
+
+      - name: Cross-campaign proposals
+        continue-on-error: true
+        run: python scripts/refresh_proposals.py
+
+      - name: Meta competitor learning
+        continue-on-error: true
+        run: python scripts/learn_competitors.py
+
+      - name: Deep competitor learning
+        continue-on-error: true
+        run: python scripts/learn_competitors_deep.py
+
+      - name: Experiment outcomes
+        continue-on-error: true
+        run: python scripts/refresh_experiment_outcomes.py
+
+      - name: Propose new experiments
+        continue-on-error: true
+        run: python scripts/propose_experiments.py
+
+      - name: Rejection learning
+        continue-on-error: true
+        run: python scripts/learn_rejections.py
+
+      - name: Cross-pattern refresh
+        continue-on-error: true
+        run: python scripts/refresh_cross_patterns.py
+
+      - name: Refresh Director briefs
+        continue-on-error: true
+        run: python scripts/refresh_briefs.py
+
+      - name: Refresh IG token
+        continue-on-error: true
+        run: python scripts/refresh_ig_token.py
+
+      - name: Push state
+        if: always()
+        env:
+          STATE_ENCRYPTION_KEY: ${{ secrets.STATE_ENCRYPTION_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: bash deploy/state_push.sh

@@ -1,0 +1,133 @@
+"""Download a source video with yt-dlp.
+
+Designed to be robust for YouTube, TikTok, Instagram, X/Twitter, Twitch,
+Kick, Vimeo, Rumble — anything yt-dlp supports.
+
+Drops the file at data/downloads/<source_id>.<ext>.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import re
+from pathlib import Path
+from typing import Optional
+
+from loguru import logger
+
+from config import settings
+
+
+class DownloadError(RuntimeError):
+    pass
+
+
+class Downloader:
+    """Thin wrapper around yt-dlp's Python API."""
+
+    def __init__(self, output_dir: Optional[Path] = None) -> None:
+        self.output_dir = output_dir or settings.download_dir
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+    def download(self, source_url: str, prefer_mp4: bool = True) -> Path:
+        """Download source_url. Returns the local path of the downloaded file.
+
+        Accepts:
+          - An http(s) URL yt-dlp supports
+          - A `file://...` URL
+          - A bare absolute path to an existing local video
+
+        Tries h264/mp4 first so FFmpeg downstream is happy. Falls back to
+        bestvideo+bestaudio if needed.
+        """
+        local = _resolve_local_path(source_url)
+        if local is not None:
+            logger.info(f"[download] using local file {local}")
+            return local
+
+        try:
+            from yt_dlp import YoutubeDL
+        except ImportError as e:
+            raise DownloadError("yt-dlp not installed") from e
+
+        source_id = self._stable_id(source_url)
+        outtmpl = str(self.output_dir / f"{source_id}.%(ext)s")
+
+        fmt = "bv*[ext=mp4][vcodec~='^(avc|h264)']+ba[ext=m4a]/best[ext=mp4]/best" if prefer_mp4 else "best"
+
+        # yt-dlp shells out to ffmpeg to merge audio+video; it only looks
+        # at PATH unless we point it explicitly. Use the parent directory
+        # of our configured ffmpeg binary.
+        ffmpeg_location = str(Path(settings.ffmpeg_path).parent) if Path(settings.ffmpeg_path).is_absolute() else None
+
+        opts = {
+            "outtmpl": outtmpl,
+            "format": fmt,
+            "merge_output_format": "mp4",
+            "noprogress": True,
+            "quiet": True,
+            "no_warnings": True,
+            "retries": 3,
+            "fragment_retries": 5,
+            "concurrent_fragment_downloads": 4,
+            **({"ffmpeg_location": ffmpeg_location} if ffmpeg_location else {}),
+            # Be a polite client.
+            "http_headers": {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/127.0.0.0 Safari/537.36"
+                )
+            },
+        }
+
+        logger.info(f"[download] {source_url} → {source_id}.*")
+        with YoutubeDL(opts) as ydl:
+            try:
+                info = ydl.extract_info(source_url, download=True)
+            except Exception as e:
+                raise DownloadError(f"yt-dlp failed: {e}") from e
+
+        if info is None:
+            raise DownloadError("yt-dlp returned no info")
+        # yt-dlp's "filename" is set after a successful download.
+        path = info.get("requested_downloads", [{}])[0].get("filepath")
+        if not path:
+            # Best-effort: look for the file by id.
+            candidates = sorted(self.output_dir.glob(f"{source_id}.*"))
+            if candidates:
+                path = str(candidates[0])
+        if not path or not Path(path).exists():
+            raise DownloadError("could not locate downloaded file")
+        out_path = Path(path)
+        logger.info(f"[download] saved {out_path} ({out_path.stat().st_size:,} bytes)")
+        return out_path
+
+    def _stable_id(self, source_url: str) -> str:  # noqa: D401
+        return _stable_id(source_url)
+
+
+def _resolve_local_path(source: str) -> Optional[Path]:
+    """If `source` points at an existing local file, return its absolute Path."""
+    s = source.strip()
+    if s.lower().startswith("file:///"):
+        s = s[len("file:///"):]
+    elif s.lower().startswith("file://"):
+        s = s[len("file://"):]
+    # Windows paths after URL prefix can come back like "C:/foo.mp4" — accept.
+    p = Path(s)
+    try:
+        if p.is_file():
+            return p.resolve()
+    except OSError:
+        pass
+    return None
+
+
+def _stable_id(source_url: str) -> str:
+    """A short deterministic id derived from the URL."""
+    h = hashlib.sha1(source_url.encode("utf-8")).hexdigest()[:10]
+    m = re.search(r"(?:v=|/shorts/|/watch/|/video/|/p/|/reel/|/clip/)([A-Za-z0-9_-]{6,})", source_url)
+    if m:
+        return f"{m.group(1)}_{h}"
+    return f"src_{h}"

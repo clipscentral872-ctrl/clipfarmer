@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>clipfarmer · dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0f1226; color: #e6e7ee;
+  }
+  .header { padding: 18px 28px; background: #181b35; border-bottom: 1px solid #232652; display: flex; align-items: center; gap: 18px; }
+  .header h1 { font-size: 18px; margin: 0; font-weight: 700; }
+  .header .gen { color: #7d83a3; font-size: 12px; margin-left: auto; }
+  .tabs { display: flex; padding: 0 28px; background: #181b35; border-bottom: 1px solid #232652; }
+  .tab { padding: 14px 18px; cursor: pointer; color: #9ea3c8; border-bottom: 2px solid transparent; font-size: 14px; }
+  .tab.active { color: #fff; border-bottom-color: #ff7a28; }
+  .alert { margin: 14px 28px 0; padding: 12px 16px; border-radius: 8px; background: #5a1f1f; border: 1px solid #c44a4a; color: #ffd8d8; font-size: 14px; }
+  .alert.warn { background: #4a3a1a; border-color: #d49a3a; color: #ffe8b8; }
+  .alert.success { background: #1d4a2c; border-color: #2faa66; color: #c6f0d4; }
+  .container { padding: 22px 28px; max-width: 1200px; margin: 0 auto; }
+  .grid { display: grid; gap: 18px; grid-template-columns: repeat(4, 1fr); }
+  .card { background: #181b35; border: 1px solid #232652; border-radius: 12px; padding: 18px; }
+  .card .label { color: #9ea3c8; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
+  .card .num { font-size: 26px; font-weight: 700; margin-top: 6px; }
+  .card .sub { color: #7d83a3; font-size: 12px; margin-top: 4px; }
+  .row { display: grid; grid-template-columns: 2fr 1fr; gap: 18px; margin-top: 22px; }
+  .panel { background: #181b35; border: 1px solid #232652; border-radius: 12px; padding: 18px; }
+  .panel h2 { font-size: 14px; margin: 0 0 14px; color: #e6e7ee; }
+  .panel .desc { color: #9ea3c8; font-size: 13px; margin-top: 12px; line-height: 1.5; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid #232652; }
+  th { color: #9ea3c8; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; font-size: 11px; }
+  td a { color: #ff9c5a; text-decoration: none; }
+  td a:hover { text-decoration: underline; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; background: #232652; color: #c5cae9; }
+  .pill.tt { background: #2c1f3a; color: #d8b4fe; }
+  .pill.yt { background: #3a1f1f; color: #fecaca; }
+  .pill.ig { background: #3a2a1f; color: #fde68a; }
+  .selector { background: #232652; color: #fff; padding: 8px 12px; border: none; border-radius: 6px; font-size: 13px; }
+  .toggle { display: inline-flex; background: #232652; border-radius: 6px; padding: 3px; gap: 0; }
+  .toggle button { padding: 6px 12px; background: transparent; border: none; color: #9ea3c8; cursor: pointer; font-size: 12px; border-radius: 4px; }
+  .toggle button.active { background: #ff7a28; color: #fff; }
+  canvas { max-height: 280px; }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+  .empty { color: #7d83a3; font-style: italic; padding: 12px; text-align: center; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>clipfarmer</h1>
+  <span class="gen" id="gen-at"></span>
+</div>
+
+<div class="tabs">
+  <div class="tab active" data-tab="overview">Overview</div>
+  <div class="tab" data-tab="revenue">Revenue</div>
+  <div class="tab" data-tab="system">System</div>
+  <div class="tab" data-tab="competitors">Competitors</div>
+</div>
+
+<div id="alerts"></div>
+
+<!-- =================== OVERVIEW =================== -->
+<div class="tab-content active" id="tab-overview">
+  <div class="container">
+    <div class="grid">
+      <div class="card">
+        <div class="label">Total revenue (est.)</div>
+        <div class="num" id="kpi-revenue">R0.00</div>
+        <div class="sub">From cached view counts × CPM</div>
+      </div>
+      <div class="card">
+        <div class="label">Net profit (est.)</div>
+        <div class="num" id="kpi-profit">R0.00</div>
+        <div class="sub">Revenue − Claude Pro (R<span id="pro-cost"></span>/mo)</div>
+      </div>
+      <div class="card">
+        <div class="label">Total spend</div>
+        <div class="num" id="kpi-spend">R<span id="pro-cost2"></span></div>
+        <div class="sub">Claude Pro membership (API spend not yet wired)</div>
+      </div>
+      <div class="card">
+        <div class="label">API balance (Anthropic)</div>
+        <div class="num" id="kpi-balance">—</div>
+        <div class="sub">Wire to Anthropic billing when public API exists</div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="panel">
+        <h2>Revenue · last 7 days</h2>
+        <canvas id="chart-revenue-7d"></canvas>
+        <div class="desc" id="desc-revenue-7d"></div>
+      </div>
+      <div class="panel">
+        <h2>Top performing posts</h2>
+        <table>
+          <thead><tr><th>Campaign</th><th>Plat.</th><th>Views</th><th>Est.</th></tr></thead>
+          <tbody id="tbl-top-posts"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- =================== REVENUE =================== -->
+<div class="tab-content" id="tab-revenue">
+  <div class="container">
+    <div class="row" style="grid-template-columns: 1fr;">
+      <div class="panel">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+          <h2 style="margin: 0;">Revenue · time series</h2>
+          <div class="toggle" id="period-toggle">
+            <button data-period="daily" class="active">Daily</button>
+            <button data-period="weekly">Weekly</button>
+            <button data-period="monthly">Monthly</button>
+          </div>
+        </div>
+        <canvas id="chart-revenue-series"></canvas>
+        <div class="desc" id="desc-revenue-series"></div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="panel">
+        <h2>Per platform</h2>
+        <canvas id="chart-platform-revenue"></canvas>
+        <div class="desc" id="desc-platforms"></div>
+      </div>
+      <div class="panel">
+        <h2>Per campaign</h2>
+        <table>
+          <thead><tr><th>Campaign</th><th>Posts</th><th>Views</th><th>Est.</th></tr></thead>
+          <tbody id="tbl-per-campaign"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- =================== SYSTEM =================== -->
+<div class="tab-content" id="tab-system">
+  <div class="container">
+    <div class="grid">
+      <div class="card"><div class="label">Clips · 24h</div><div class="num" id="sys-24h">0</div></div>
+      <div class="card"><div class="label">Clips · 7d</div><div class="num" id="sys-7d">0</div></div>
+      <div class="card"><div class="label">Clips · 30d</div><div class="num" id="sys-30d">0</div></div>
+      <div class="card"><div class="label">Active campaigns</div><div class="num" id="sys-camp">0</div></div>
+    </div>
+    <div class="row">
+      <div class="panel">
+        <h2>Approval & post success</h2>
+        <table>
+          <tr><td>Approval rate</td><td id="sys-approval">—</td></tr>
+          <tr><td>Post success rate</td><td id="sys-post">—</td></tr>
+          <tr><td>Total clips produced</td><td id="sys-clips-total">—</td></tr>
+          <tr><td>Total platform posts</td><td id="sys-posts-total">—</td></tr>
+          <tr><td>Total Whop submissions</td><td id="sys-subs-total">—</td></tr>
+        </table>
+        <div class="desc">Approval rate = clips that reached 'posted' / total clips produced. Post success rate = posted / all posts attempted.</div>
+      </div>
+      <div class="panel">
+        <h2>Posts per platform</h2>
+        <canvas id="chart-platform-posts"></canvas>
+        <div class="desc" id="desc-system-platforms"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- =================== COMPETITORS =================== -->
+<div class="tab-content" id="tab-competitors">
+  <div class="container">
+    <div class="panel">
+      <h2>Top performing competitor clips (from each campaign's brief)</h2>
+      <table>
+        <thead><tr><th>Campaign</th><th>Title / hook</th><th>Views</th><th>Platform</th></tr></thead>
+        <tbody id="tbl-competitors"></tbody>
+      </table>
+      <div class="desc" id="desc-competitors"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const DATA = {"generated_at": "2026-06-08T06:11:23+00:00", "summary": {"total_revenue_zar": 110.44, "total_revenue_usd": 5.97, "claude_pro_monthly_zar": 380.0, "api_balance_usd": null, "api_balance_warning": false, "total_views": 5501, "total_posts": 13, "total_clips": 21, "total_campaigns_active": 17, "total_submissions": 3}, "platforms": {"youtube": {"posts": 8, "views": 5110, "earnings_zar": 102.14}, "instagram": {"posts": 5, "views": 391, "earnings_zar": 8.3}}, "per_campaign": [{"campaign_id": 50, "title": "MrBeast (IG) I Survived 7 Days in the Arctic", "posts": 2, "views": 2, "cpm_usd": 1.0, "earnings_zar": 0.04}, {"campaign_id": 49, "title": "MrBeast (TT/YT) I Survived 7 Days in the Arctic", "posts": 1, "views": 0, "cpm_usd": 1.0, "earnings_zar": 0.0}, {"campaign_id": 43, "title": "Substack OpenTab Ashlee Vance [Podcast Clipping]", "posts": 2, "views": 282, "cpm_usd": 1.0, "earnings_zar": 5.22}, {"campaign_id": 48, "title": "Boxabl Official Clipping", "posts": 5, "views": 2364, "cpm_usd": 1.5, "earnings_zar": 65.6}, {"campaign_id": 44, "title": "Jacks Dining Room [Viral Clipping]", "posts": 3, "views": 2853, "cpm_usd": 0.75, "earnings_zar": 39.59}], "revenue_7d": {"labels": ["2026-06-02", "2026-06-03", "2026-06-04", "2026-06-05", "2026-06-06", "2026-06-07", "2026-06-08"], "values_zar": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}, "top_posts": [{"id": 1, "platform": "youtube", "campaign": "Jacks Dining Room [Viral Clipping]", "title": "POV: Japan does pancakes DIFFERENT 🥞 A whole stick of butter??? @jacksdiningroom", "url": "https://www.youtube.com/shorts/gj0Jh33555s", "views": 1442, "earnings_zar": 20.01}, {"id": 3, "platform": "youtube", "campaign": "Jacks Dining Room [Viral Clipping]", "title": "This might be the cutest thing I've ever experienced in Tokyo 😭 Otters, hedgehog", "url": "https://www.youtube.com/shorts/FRf-Xj5SbVE", "views": 1297, "earnings_zar": 18.0}, {"id": 7, "platform": "youtube", "campaign": "Boxabl Official Clipping", "title": "Under $50K and built in under an hour? @boxabl is changing everything about how ", "url": "https://www.youtube.com/shorts/hnWbUG2gS2I", "views": 989, "earnings_zar": 27.44}, {"id": 8, "platform": "youtube", "campaign": "Boxabl Official Clipping", "title": "From 3 weeks to 15 MINUTES per home. @boxabl's factory is about to change everyt", "url": "https://www.youtube.com/shorts/cHKo2veyEnQ", "views": 915, "earnings_zar": 25.39}, {"id": 5, "platform": "youtube", "campaign": "Boxabl Official Clipping", "title": "Wait till you see it UNFOLD 🤯 Full home ships on a trailer, no permits needed @b", "url": "https://www.youtube.com/shorts/ER-_N3lNKk8", "views": 288, "earnings_zar": 7.99}, {"id": 10, "platform": "youtube", "campaign": "Substack OpenTab Ashlee Vance [Podcast Clipping]", "title": "Open Tab is a new interview series hosted by Substack co-founder Hamish McKenzie", "url": "https://www.youtube.com/shorts/6sjEvHsWte8", "views": 177, "earnings_zar": 3.27}, {"id": 4, "platform": "instagram", "campaign": "Boxabl Official Clipping", "title": "Wait till you see it UNFOLD 🤯 Full home ships on a trailer, no permits needed @b", "url": "https://www.instagram.com/reel/DY7ctzCjaPY/", "views": 114, "earnings_zar": 3.16}, {"id": 2, "platform": "instagram", "campaign": "Jacks Dining Room [Viral Clipping]", "title": "This might be the cutest thing I've ever experienced in Tokyo 😭 Otters, hedgehog", "url": "https://www.instagram.com/reel/DY7RYENDbqu/", "views": 114, "earnings_zar": 1.58}, {"id": 9, "platform": "instagram", "campaign": "Substack OpenTab Ashlee Vance [Podcast Clipping]", "title": "Open Tab is a new interview series hosted by Substack co-founder Hamish McKenzie", "url": "https://www.instagram.com/reel/DY9zoxRliEH/", "views": 105, "earnings_zar": 1.94}, {"id": 6, "platform": "instagram", "campaign": "Boxabl Official Clipping", "title": "Under $50K and built in under an hour? @boxabl is changing everything about how ", "url": "https://www.instagram.com/reel/DY9tc_lD53W/", "views": 58, "earnings_zar": 1.61}], "system": {"clips_24h": 0, "clips_7d": 1, "clips_30d": 21, "post_success_rate_pct": 100.0, "approval_rate_pct": 57.1}, "competitors": [], "campaigns": [{"id": 42, "title": "Enhanced Games", "payout_per_1k_views": 1.2, "budget_remaining_pct": 9.11, "viability_score": 34.59, "tracking_code": null, "current_source_path": null}, {"id": 43, "title": "Substack OpenTab Ashlee Vance [Podcast Clipping]", "payout_per_1k_views": 1.0, "budget_remaining_pct": 76.54, "viability_score": 63.12, "tracking_code": null, "current_source_path": "C:\\Users\\chris\\Downloads\\handbraked opentab.mp4"}, {"id": 44, "title": "Jacks Dining Room [Viral Clipping]", "payout_per_1k_views": 0.75, "budget_remaining_pct": 42.73, "viability_score": 36.38, "tracking_code": "CR0C8IM0", "current_source_path": "C:\\Users\\chris\\clipfarmer\\data\\downloads\\wBEQl6eQg4E_a93801243d.mp4"}, {"id": 45, "title": "Towa Bird Concert Clipping", "payout_per_1k_views": 1.5, "budget_remaining_pct": 84.22, "viability_score": 68.69, "tracking_code": null, "current_source_path": null}, {"id": 46, "title": "Anyma & Lisa \"Bad Angel\" [Audio Clipping]", "payout_per_1k_views": 0.5, "budget_remaining_pct": 5.38, "viability_score": 30.65, "tracking_code": null, "current_source_path": null}, {"id": 47, "title": "Bloom Shark Tank Clipping", "payout_per_1k_views": 1.0, "budget_remaining_pct": 0.61, "viability_score": 32.57, "tracking_code": null, "current_source_path": null}, {"id": 48, "title": "Boxabl Official Clipping", "payout_per_1k_views": 1.5, "budget_remaining_pct": 67.23, "viability_score": 61.89, "tracking_code": null, "current_source_path": "C:\\Users\\chris\\clipfarmer\\data\\downloads\\8JMrfSFQdpo_9f3a4e6a4b.mp4"}, {"id": 51, "title": "Dhar Mann Studios — What Happens Next - Podcast With Jordan Matter", "payout_per_1k_views": 1.0, "budget_remaining_pct": null, "viability_score": null, "tracking_code": null, "current_source_path": "C:\\Users\\chris\\clipfarmer\\data\\downloads\\rxA1GbjEQis_84ee352cd8.mp4"}, {"id": 52, "title": "HUGE Conversations — Jony Ive Shows Most Controversial Ferrari Ever", "payout_per_1k_views": 1.0, "budget_remaining_pct": null, "viability_score": null, "tracking_code": null, "current_source_path": null}, {"id": 61, "title": "Sujal × Ishan Sharma Podcast Clips", "payout_per_1k_views": null, "budget_remaining_pct": null, "viability_score": null, "tracking_code": null, "current_source_path": null}, {"id": 62, "title": "BOLDorFOLD x ClipAffiliates", "payout_per_1k_views": null, "budget_remaining_pct": null, "viability_score": null, "tracking_code": null, "current_source_path": null}, {"id": 63, "title": "David Dobrik: We threw a celebrity pool party!", "payout_per_1k_views": 1.0, "budget_remaining_pct": 20.31, "viability_score": 34.94, "tracking_code": null, "current_source_path": null}, {"id": 64, "title": "David Protein x Clipfarm", "payout_per_1k_views": 1.25, "budget_remaining_pct": 98.88, "viability_score": 73.3, "tracking_code": null, "current_source_path": "C:\\Users\\chris\\clipfarmer\\data\\downloads\\K4Ze-Sp6aUE_bb552135a7.mp4"}, {"id": 65, "title": "Circle", "payout_per_1k_views": 2.5, "budget_remaining_pct": null, "viability_score": null, "tracking_code": null, "current_source_path": "C:\\Users\\chris\\clipfarmer\\data\\downloads\\1p90ADBWUGg_4a0fbf59d6.mp4"}, {"id": 66, "title": "HUGE Conversations", "payout_per_1k_views": 1.0, "budget_remaining_pct": null, "viability_score": null, "tracking_code": null, "current_source_path": null}, {"id": 67, "title": "Victor Ray", "payout_per_1k_views": 1.0, "budget_remaining_pct": null, "viability_score": null, "tracking_code": null, "current_source_path": null}, {"id": 68, "title": "Dhar Mann Studios", "payout_per_1k_views": 1.0, "budget_remaining_pct": null, "viability_score": null, "tracking_code": null, "current_source_path": null}]};
+
+// ---------------------- helpers ----------------------
+const fmtZAR = (n) => "R" + (Number(n || 0)).toLocaleString("en-ZA", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const fmtNum = (n) => Number(n || 0).toLocaleString();
+const platformPill = (p) => `<span class="pill ${p === 'tiktok' ? 'tt' : p === 'youtube' ? 'yt' : p === 'instagram' ? 'ig' : ''}">${p || '?'}</span>`;
+
+// ---------------------- alerts ----------------------
+(function alerts() {
+  const box = document.getElementById('alerts');
+  if (DATA.summary.api_balance_warning) {
+    box.innerHTML += `<div class="alert">⚠️ Anthropic API balance is $${DATA.summary.api_balance_usd?.toFixed?.(2) || '?'} — top up soon.</div>`;
+  }
+  // Best-performing clip alert (>10x median)
+  const top = DATA.top_posts[0];
+  if (top && top.views >= 50000) {
+    box.innerHTML += `<div class="alert success">🚀 One of your clips just crossed ${fmtNum(top.views)} views — <a href="${top.url}" target="_blank" style="color: #c6f0d4;">${top.title}</a></div>`;
+  }
+})();
+
+// ---------------------- header ----------------------
+document.getElementById('gen-at').textContent = "updated " + new Date(DATA.generated_at).toLocaleString();
+
+// ---------------------- tabs ----------------------
+document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+  document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(x => x.classList.remove('active'));
+  t.classList.add('active');
+  document.getElementById('tab-' + t.dataset.tab).classList.add('active');
+}));
+
+// ---------------------- OVERVIEW ----------------------
+(function overview() {
+  const s = DATA.summary;
+  document.getElementById('kpi-revenue').textContent = fmtZAR(s.total_revenue_zar);
+  document.getElementById('kpi-profit').textContent = fmtZAR(s.total_revenue_zar - s.claude_pro_monthly_zar);
+  document.getElementById('pro-cost').textContent = s.claude_pro_monthly_zar;
+  document.getElementById('pro-cost2').textContent = s.claude_pro_monthly_zar.toFixed(2);
+  document.getElementById('kpi-balance').textContent = s.api_balance_usd != null ? ("$" + s.api_balance_usd.toFixed(2)) : "—";
+
+  new Chart(document.getElementById('chart-revenue-7d'), {
+    type: 'bar',
+    data: {
+      labels: DATA.revenue_7d.labels.map(d => d.slice(5)),
+      datasets: [{ label: 'Revenue (R)', data: DATA.revenue_7d.values_zar, backgroundColor: '#ff7a28' }]
+    },
+    options: { plugins: { legend: { display: false } }, scales: { y: { ticks: { color: '#9ea3c8' } }, x: { ticks: { color: '#9ea3c8' } } } }
+  });
+  const sum7 = DATA.revenue_7d.values_zar.reduce((a, b) => a + b, 0);
+  document.getElementById('desc-revenue-7d').innerHTML =
+    `Last 7 days: <b>${fmtZAR(sum7)}</b> in estimated revenue from cached view counts.`;
+
+  const tbl = document.getElementById('tbl-top-posts');
+  if (!DATA.top_posts.length) {
+    tbl.innerHTML = `<tr><td colspan=4 class="empty">No posts yet</td></tr>`;
+  } else {
+    tbl.innerHTML = DATA.top_posts.map(p => `
+      <tr>
+        <td>${p.campaign || '—'}</td>
+        <td>${platformPill(p.platform)}</td>
+        <td>${fmtNum(p.views)}</td>
+        <td>${fmtZAR(p.earnings_zar)} ${p.url ? `· <a href="${p.url}" target="_blank">open</a>` : ''}</td>
+      </tr>
+    `).join('');
+  }
+})();
+
+// ---------------------- REVENUE ----------------------
+let revenueChart;
+function drawRevenueSeries(period) {
+  const ctx = document.getElementById('chart-revenue-series');
+  const labels = DATA.revenue_7d.labels;
+  const values = DATA.revenue_7d.values_zar;
+  if (revenueChart) revenueChart.destroy();
+  revenueChart = new Chart(ctx, {
+    type: 'line',
+    data: { labels: labels.map(d => d.slice(5)), datasets: [{ label: 'Revenue (R)', data: values, borderColor: '#ff7a28', backgroundColor: 'rgba(255,122,40,0.2)', fill: true, tension: 0.3 }] },
+    options: { plugins: { legend: { display: false } }, scales: { y: { ticks: { color: '#9ea3c8' } }, x: { ticks: { color: '#9ea3c8' } } } }
+  });
+  const total = values.reduce((a, b) => a + b, 0);
+  document.getElementById('desc-revenue-series').innerHTML =
+    `<b>${period[0].toUpperCase() + period.slice(1)}</b> view: total ${fmtZAR(total)} estimated. ` +
+    `Weekly / monthly aggregation will fill in once data accumulates beyond 7 days.`;
+}
+drawRevenueSeries('daily');
+document.querySelectorAll('#period-toggle button').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('#period-toggle button').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  drawRevenueSeries(b.dataset.period);
+}));
+
+(function platforms() {
+  const labels = Object.keys(DATA.platforms);
+  const values = labels.map(p => DATA.platforms[p].earnings_zar);
+  if (!labels.length) {
+    document.getElementById('chart-platform-revenue').replaceWith(Object.assign(document.createElement('div'), {className: 'empty', textContent: 'No platform data yet'}));
+  } else {
+    new Chart(document.getElementById('chart-platform-revenue'), {
+      type: 'doughnut',
+      data: { labels, datasets: [{ data: values, backgroundColor: ['#ff7a28', '#5b8def', '#36c98c', '#d8b4fe'] }] },
+      options: { plugins: { legend: { position: 'bottom', labels: { color: '#9ea3c8' } } } }
+    });
+  }
+  const desc = labels.map(p => `<b>${p}</b>: ${DATA.platforms[p].posts} posts, ${fmtNum(DATA.platforms[p].views)} views, ${fmtZAR(DATA.platforms[p].earnings_zar)}`).join(' · ');
+  document.getElementById('desc-platforms').innerHTML = desc || 'No data yet.';
+})();
+
+(function perCampaign() {
+  const tbl = document.getElementById('tbl-per-campaign');
+  if (!DATA.per_campaign.length) {
+    tbl.innerHTML = `<tr><td colspan=4 class="empty">No campaigns with posts yet</td></tr>`;
+    return;
+  }
+  tbl.innerHTML = DATA.per_campaign
+    .sort((a, b) => b.earnings_zar - a.earnings_zar)
+    .map(c => `
+      <tr>
+        <td>${c.title} <span class="pill">#${c.campaign_id}</span></td>
+        <td>${c.posts}</td>
+        <td>${fmtNum(c.views)}</td>
+        <td>${fmtZAR(c.earnings_zar)}</td>
+      </tr>`).join('');
+})();
+
+// ---------------------- SYSTEM ----------------------
+(function system() {
+  const s = DATA.system;
+  document.getElementById('sys-24h').textContent = s.clips_24h;
+  document.getElementById('sys-7d').textContent = s.clips_7d;
+  document.getElementById('sys-30d').textContent = s.clips_30d;
+  document.getElementById('sys-camp').textContent = DATA.summary.total_campaigns_active;
+  document.getElementById('sys-approval').textContent = s.approval_rate_pct + "%";
+  document.getElementById('sys-post').textContent = s.post_success_rate_pct + "%";
+  document.getElementById('sys-clips-total').textContent = DATA.summary.total_clips;
+  document.getElementById('sys-posts-total').textContent = DATA.summary.total_posts;
+  document.getElementById('sys-subs-total').textContent = DATA.summary.total_submissions;
+
+  const labels = Object.keys(DATA.platforms);
+  const values = labels.map(p => DATA.platforms[p].posts);
+  if (labels.length) {
+    new Chart(document.getElementById('chart-platform-posts'), {
+      type: 'bar',
+      data: { labels, datasets: [{ label: 'Posts', data: values, backgroundColor: '#5b8def' }] },
+      options: { plugins: { legend: { display: false } }, scales: { y: { ticks: { color: '#9ea3c8' } }, x: { ticks: { color: '#9ea3c8' } } } }
+    });
+    document.getElementById('desc-system-platforms').innerHTML =
+      labels.map(p => `<b>${p}</b>: ${DATA.platforms[p].posts}`).join(' · ');
+  }
+})();
+
+// ---------------------- COMPETITORS ----------------------
+(function competitors() {
+  const tbl = document.getElementById('tbl-competitors');
+  if (!DATA.competitors.length) {
+    tbl.innerHTML = `<tr><td colspan=4 class="empty">No top-performer data yet. Run <code>auto_extract_briefs</code> + <code>scrape_top_performers</code> per campaign to populate.</td></tr>`;
+    document.getElementById('desc-competitors').textContent = '';
+    return;
+  }
+  tbl.innerHTML = DATA.competitors.map(c => `
+    <tr>
+      <td>${c.campaign_title || c.campaign_id} <span class="pill">#${c.campaign_id}</span></td>
+      <td>${c.title || c.hook || c.notes || '—'}</td>
+      <td>${c.views || '?'}</td>
+      <td>${platformPill(c.platform || '')}</td>
+    </tr>`).join('');
+  document.getElementById('desc-competitors').innerHTML =
+    `<b>${DATA.competitors.length}</b> top-performer clips across <b>${DATA.summary.total_campaigns_active}</b> campaigns. Use these as style signal for our scorer — clip in the energy / angle that's already winning.`;
+})();
+</script>
+</body>
+</html>

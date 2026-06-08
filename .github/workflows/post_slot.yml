@@ -1,0 +1,44 @@
+name: Post slot
+# Fires at each posting slot.  Slot times are US Eastern prime time, hard-coded
+# to UTC here because GitHub cron is always UTC and doesn't observe DST.
+# US Eastern slots: 10:00 12:00 15:00 17:00 20:00 22:00 → approximate UTC.
+
+on:
+  schedule:
+    - cron: '0 14 * * *'   # 10:00 ET (winter) / 09:00 ET (summer)
+    - cron: '0 16 * * *'   # 12:00 ET / 11:00 ET
+    - cron: '0 19 * * *'   # 15:00 ET / 14:00 ET — also 21:00 SAST → in Chris's window
+    - cron: '0 21 * * *'   # 17:00 ET / 16:00 ET
+    - cron: '0 0 * * *'    # 20:00 ET prev day / 19:00 ET prev day
+    - cron: '0 2 * * *'    # 22:00 ET / 21:00 ET
+  workflow_dispatch:
+
+concurrency:
+  group: clipfarmer-state
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60     # transcribing + cutting + posting can take a while
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-clipfarmer
+        with:
+          state-key: ${{ secrets.STATE_ENCRYPTION_KEY }}
+          dotenv: ${{ secrets.CLIPFARMER_DOTENV }}
+
+      - name: Run one posting slot
+        run: python -c "from db.repository import Repository; from scheduler.runner import run_one_slot; print('posted' if run_one_slot(repo=Repository(), auto_submit=True) else 'no-op')"
+
+      - name: Push state
+        if: always()
+        env:
+          STATE_ENCRYPTION_KEY: ${{ secrets.STATE_ENCRYPTION_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: bash deploy/state_push.sh

@@ -1,0 +1,21 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+.idea/
+.vscode/
+
+data/clipfarmer.db
+data/clipfarmer.db-journal
+data/downloads/
+data/clips/
+data/screenshots/
+logs/
+*.log
+
+# Playwright auth state
+.auth/
+*.session

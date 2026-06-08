@@ -1,0 +1,24 @@
+[Unit]
+Description=Clipfarmer 24/7 scheduler
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/clipfarmer
+EnvironmentFile=/home/ubuntu/clipfarmer/.env
+ExecStart=/home/ubuntu/clipfarmer/.venv/bin/python -m scheduler
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Resource hygiene — leave headroom so Whisper / Playwright runaway processes
+# don't wedge the whole VM.  Tuned for Hetzner CX23 (8 GB RAM); on a larger
+# box (e.g. Oracle ARM with 24 GB) you can raise these.
+MemoryHigh=6G
+MemoryMax=7500M
+
+[Install]
+WantedBy=multi-user.target

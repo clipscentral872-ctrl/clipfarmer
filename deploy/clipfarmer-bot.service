@@ -1,0 +1,18 @@
+[Unit]
+Description=Clipfarmer Telegram bot (handles /approve and /reject replies)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/clipfarmer
+EnvironmentFile=/home/ubuntu/clipfarmer/.env
+ExecStart=/home/ubuntu/clipfarmer/.venv/bin/python -m bot
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

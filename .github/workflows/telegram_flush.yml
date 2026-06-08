@@ -1,0 +1,44 @@
+name: Telegram quiet-hours flush
+# Fires at 15:00 SAST = 13:00 UTC.  Drains any messages queued during the
+# overnight quiet hours and delivers them to Chris in one batch + sends the
+# daily briefing right after so his window opens with a clear status.
+
+on:
+  schedule:
+    - cron: '0 13 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: clipfarmer-state
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  flush:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-clipfarmer
+        with:
+          state-key: ${{ secrets.STATE_ENCRYPTION_KEY }}
+          dotenv: ${{ secrets.CLIPFARMER_DOTENV }}
+          install-playwright: 'false'   # no browser needed for this job
+
+      - name: Flush queued Telegram messages
+        run: python -c "from publisher.telegram_gate import TelegramGate; g=TelegramGate(); print('flushed:', g.flush_queue())"
+
+      - name: Send daily briefing
+        continue-on-error: true
+        run: python scripts/send_daily_briefing.py
+
+      - name: Push state
+        if: always()
+        env:
+          STATE_ENCRYPTION_KEY: ${{ secrets.STATE_ENCRYPTION_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: bash deploy/state_push.sh

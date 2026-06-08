@@ -1,0 +1,38 @@
+name: Opportunity scan
+# Hourly scan of Vyro / ClipStake / ClipAffiliates for new high-EV campaigns.
+# Mirrors the `scan_opportunities` cron job that used to live in scheduler/__main__.py.
+
+on:
+  schedule:
+    - cron: '15 * * * *'    # every hour at :15 UTC
+  workflow_dispatch:        # manual button for one-off runs
+
+concurrency:
+  group: clipfarmer-state
+  cancel-in-progress: false   # queue, don't cancel
+
+permissions:
+  contents: write             # so state_push can force-push the `state` branch
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-clipfarmer
+        with:
+          state-key: ${{ secrets.STATE_ENCRYPTION_KEY }}
+          dotenv: ${{ secrets.CLIPFARMER_DOTENV }}
+
+      - name: Run scanner
+        run: python scripts/scan_for_opportunities.py
+
+      - name: Push state
+        if: always()
+        env:
+          STATE_ENCRYPTION_KEY: ${{ secrets.STATE_ENCRYPTION_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: bash deploy/state_push.sh

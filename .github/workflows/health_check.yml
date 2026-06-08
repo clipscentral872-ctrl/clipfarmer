@@ -1,0 +1,40 @@
+name: Health check
+# Daily integrity check.  Notifies via Telegram only if something is broken
+# (token revoked, session lost, etc.) — silent on green.
+# 12:30 UTC = 14:30 SAST → lands just before Chris's active window opens.
+
+on:
+  schedule:
+    - cron: '30 12 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: clipfarmer-state
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-clipfarmer
+        with:
+          state-key: ${{ secrets.STATE_ENCRYPTION_KEY }}
+          dotenv: ${{ secrets.CLIPFARMER_DOTENV }}
+          install-playwright: 'false'
+
+      - name: Run health check
+        run: python scripts/health_check.py
+
+      - name: Push state
+        if: always()
+        env:
+          STATE_ENCRYPTION_KEY: ${{ secrets.STATE_ENCRYPTION_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: bash deploy/state_push.sh
