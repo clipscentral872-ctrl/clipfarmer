@@ -87,55 +87,71 @@ def main() -> int:
     failed_ids: set[int] = set()
     produced = 0
     for slot_at in slots:
-        campaign = _next_unfailed(candidates, failed_ids)
-        if not campaign:
-            logger.warning("[warehouse] every eligible campaign failed source resolution — stopping")
+        # Try campaigns in EV order until one resolves a source AND produces
+        # a clip.  Failures permanently exclude the campaign for this run.
+        clip_for_slot = None
+        chosen_campaign = None
+        while True:
+            campaign = _next_unfailed(candidates, failed_ids)
+            if not campaign:
+                logger.warning(
+                    f"[warehouse] no candidate succeeds for slot {slot_at.isoformat()} — "
+                    f"failed_ids={sorted(failed_ids)}"
+                )
+                break
+
+            # Ensure a downloadable source exists (same flow as runner.run_one_slot)
+            source_path = (campaign.get("current_source_path") or "").strip()
+            if not source_path or not Path(source_path).exists():
+                must_match = (_parse_structured_rules(campaign).get("source_must_match") or [])
+                if must_match:
+                    logger.warning(
+                        f"[warehouse] #{campaign['id']} needs source matching {must_match} — skip"
+                    )
+                    failed_ids.add(campaign["id"])
+                    continue
+                p = find_and_download_source(campaign)
+                if not p or not p.exists():
+                    logger.warning(f"[warehouse] auto-find source failed for #{campaign['id']}")
+                    failed_ids.add(campaign["id"])
+                    continue
+                repo.set_campaign_current_source(campaign["id"], str(p))
+                source_path = str(p)
+
+            try:
+                clips = produce_clips_for_campaign(campaign, source_path, n_clips=1)
+            except Exception as e:
+                logger.exception(f"[warehouse] producer crashed on #{campaign['id']}: {e}")
+                failed_ids.add(campaign["id"])
+                continue
+            if not clips:
+                logger.info(f"[warehouse] engine produced 0 clips for #{campaign['id']}")
+                failed_ids.add(campaign["id"])
+                continue
+
+            clip_for_slot = clips[0]
+            chosen_campaign = campaign
+            break  # we have a clip — exit the inner while
+
+        if not clip_for_slot or not chosen_campaign:
+            # Exhausted candidates without a clip for this slot.  Move on; the
+            # next producer run gets a fresh failed_ids set.
             break
 
-        # Ensure a downloadable source exists (same flow as runner.run_one_slot)
-        source_path = (campaign.get("current_source_path") or "").strip()
-        if not source_path or not Path(source_path).exists():
-            must_match = (_parse_structured_rules(campaign).get("source_must_match") or [])
-            if must_match:
-                logger.warning(
-                    f"[warehouse] campaign #{campaign['id']} needs source matching {must_match} — skipping"
-                )
-                failed_ids.add(campaign["id"])
-                continue
-            p = find_and_download_source(campaign)
-            if not p or not p.exists():
-                logger.warning(f"[warehouse] auto-find source failed for #{campaign['id']} — excluding from this run")
-                failed_ids.add(campaign["id"])
-                continue
-            repo.set_campaign_current_source(campaign["id"], str(p))
-            source_path = str(p)
-
-        try:
-            clips = produce_clips_for_campaign(campaign, source_path, n_clips=1)
-        except Exception as e:
-            logger.exception(f"[warehouse] producer crashed on #{campaign['id']}: {e}")
-            failed_ids.add(campaign["id"])
-            continue
-        if not clips:
-            logger.info(f"[warehouse] engine produced 0 clips for #{campaign['id']}")
-            failed_ids.add(campaign["id"])
-            continue
-
-        clip = clips[0]
         # Insert into DB explicitly — `produce_clips_for_campaign` returns
         # engine-side ProducedClip objects but doesn't write to the clips
         # table; the orchestrator does that just before publishing.  For
         # warehouse mode we own the insert so we get a clip_id to tag.
         try:
-            clip_id = _ensure_clip_in_db(repo, campaign, clip)
+            clip_id = _ensure_clip_in_db(repo, chosen_campaign, clip_for_slot)
         except Exception as e:
             logger.exception(f"[warehouse] failed to insert clip into DB: {e}")
             continue
 
         repo.mark_clip_warehoused(clip_id, scheduled_post_at=slot_at.isoformat())
         logger.info(
-            f"[warehouse] +1 clip #{clip_id} for #{campaign['id']} '{campaign['title']}' "
-            f"slot {slot_at.isoformat()}"
+            f"[warehouse] +1 clip #{clip_id} for #{chosen_campaign['id']} "
+            f"'{chosen_campaign['title']}' slot {slot_at.isoformat()}"
         )
         produced += 1
 
