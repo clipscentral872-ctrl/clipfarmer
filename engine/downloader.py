@@ -49,15 +49,26 @@ class Downloader:
             return local
 
         # YouTube on cloud-IP GitHub Actions runners is gated by SABR +
-        # PO Token, which yt-dlp can't bypass without a residential IP or
-        # external token server.  We try a sequence of independent extractors:
-        #   1. pytubefix — own extractor, sometimes works where yt-dlp doesn't
-        #   2. Cobalt    — community service, currently mostly auth-gated
-        #   3. yt-dlp    — last resort, expected to fail on cloud IPs
+        # PO Token, which yt-dlp / pytubefix / Cobalt all hit.  Last
+        # autonomous attempt is to drive a consumer "paste URL → get MP4"
+        # converter site via Playwright — those sites either run on
+        # residential IPs or solve the challenges server-side, so from
+        # our perspective it's just a headless click flow.
+        # Order: site driver → pytubefix → Cobalt → yt-dlp.
         url_lower = (source_url or "").lower()
         if "youtube.com" in url_lower or "youtu.be" in url_lower:
             source_id = self._stable_id(source_url)
             out_path = self.output_dir / f"{source_id}.mp4"
+            # 1. Playwright-driven converter site
+            try:
+                from engine.site_downloader import download_via_site, SiteDownloadError
+                try:
+                    return download_via_site(source_url, out_path)
+                except SiteDownloadError as e:
+                    logger.warning(f"[download] site driver failed ({e}); trying pytubefix")
+            except Exception as e:
+                logger.warning(f"[download] site driver errored ({e}); trying pytubefix")
+            # 2. pytubefix + 3. Cobalt
             try:
                 from engine.cobalt_downloader import (
                     download_youtube,
