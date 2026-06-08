@@ -241,9 +241,13 @@ def publish_clip_to_all_platforms(
     campaign: dict,
     clip: ProducedClip,
     gate: Optional[TelegramGate] = None,
+    pre_approved: bool = False,
 ) -> list[int]:
     """Post the clip to TikTok, YouTube Shorts, and Instagram Reels via
-    Playwright. Writes posts rows to the DB. Returns the list of post row ids."""
+    Playwright. Writes posts rows to the DB. Returns the list of post row ids.
+
+    `pre_approved=True` skips the inline Telegram approval gate.  Use for
+    warehouse clips that Chris has already approved via promote_for_review."""
     structured = _parse_json_obj(campaign.get("structured_rules"))
 
     # Structured rules can override required platforms.
@@ -352,8 +356,10 @@ def publish_clip_to_all_platforms(
     except Exception as e:
         logger.warning(f"[qa] check failed (proceeding without QA): {e}")
 
-    # Telegram approval gate — only post if user hits /approve.
-    if gate and gate.enabled:
+    # Telegram approval gate — only post if user hits /approve.  Warehouse
+    # clips already have an approval verdict on file, so we skip the inline
+    # gate when `pre_approved=True`.
+    if gate and gate.enabled and not pre_approved:
         gate.send_clip_for_approval(
             video_path=clip.final_path,
             campaign_title=campaign.get("title", ""),
@@ -418,6 +424,12 @@ def publish_clip_to_all_platforms(
 
 
 def _ensure_clip_in_db(repo: Repository, campaign: dict, clip: ProducedClip) -> int:
+    # Warehouse clips were already inserted by produce_warehouse.py and carry
+    # their DB id on the object.  Return it as-is so we don't duplicate rows.
+    db_id = getattr(clip, "db_id", None)
+    if db_id:
+        return db_id
+
     # The clips table's source_video_id is a NOT NULL FK to source_videos. Make
     # sure a row exists for this campaign+source before inserting the clip.
     # We use the campaign's current_source_path as the canonical key (or
