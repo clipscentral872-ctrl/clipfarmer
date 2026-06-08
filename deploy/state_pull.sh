@@ -46,5 +46,5 @@ log "extracting into $REPO_DIR"
 tar -xzf "$TMP/state.tar.gz" -C "$REPO_DIR"
 
 mkdir -p .auth data logs
-log "state pulled — DB rows: $(sqlite3 clipfarmer.db 'SELECT COUNT(*) FROM campaigns' 2>/dev/null || echo 'n/a')"
+log "state pulled — DB rows: $(sqlite3 data/clipfarmer.db 'SELECT COUNT(*) FROM campaigns' 2>/dev/null || echo 'n/a')"
 rm -rf "$TMP"
