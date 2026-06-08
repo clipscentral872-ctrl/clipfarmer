@@ -167,20 +167,18 @@ def _youtube_cookie_opts(source_url: str) -> dict:
 
 
 def _youtube_extractor_args(source_url: str) -> dict:
-    """Tell yt-dlp to use YouTube's web_safari + mweb clients (current most
-    reliable on cloud IPs as of 2025-06; android client was deprecated by
-    YouTube around 2024-08), plus skip the JS challenge entirely so we don't
-    need n-sig decoding.  Verbose mode prints the actual format list so we
-    can diagnose why downloads fail."""
+    """As of mid-2025 YouTube force-routes most clients into SABR streaming
+    which yt-dlp cannot decode, producing "Requested format is not available"
+    on every download attempt (issue yt-dlp/yt-dlp#12482).  The smart-TV
+    client (`tv`) is the last reliable bypass — it returns regular DASH
+    formats without the SABR challenge.  We keep tv_embedded as a fallback."""
     url = (source_url or "").lower()
     if not ("youtube.com" in url or "youtu.be" in url):
         return {}
     return {
         "extractor_args": {
             "youtube": {
-                "player_client": ["web_safari", "mweb", "tv_embedded"],
-                "player_skip": ["webpage"],
+                "player_client": ["tv", "tv_embedded"],
             },
         },
-        "verbose": True,
     }
