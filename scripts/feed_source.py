@@ -21,10 +21,16 @@ After download the script:
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# Tell the downloader we're on a residential-IP laptop so it skips every
+# cloud-bypass trick (site driver, pytubefix, Cobalt, tv player_client)
+# and just uses vanilla yt-dlp + cookies — which actually works here.
+os.environ["CLIPFARMER_LOCAL"] = "1"
 
 from loguru import logger
 

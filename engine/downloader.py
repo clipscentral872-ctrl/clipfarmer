@@ -9,6 +9,7 @@ Drops the file at data/downloads/<source_id>.<ext>.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 from pathlib import Path
 from typing import Optional
@@ -20,6 +21,13 @@ from config import settings
 
 class DownloadError(RuntimeError):
     pass
+
+
+def _local_mode() -> bool:
+    """True when this process runs on Chris's residential-IP laptop.
+    In that case skip every cloud-bypass trick (site driver, pytubefix,
+    Cobalt, tv player_client) — vanilla yt-dlp + cookies just works."""
+    return os.environ.get("CLIPFARMER_LOCAL", "").lower() in ("1", "true", "yes", "on")
 
 
 class Downloader:
@@ -56,7 +64,7 @@ class Downloader:
         # our perspective it's just a headless click flow.
         # Order: site driver → pytubefix → Cobalt → yt-dlp.
         url_lower = (source_url or "").lower()
-        if "youtube.com" in url_lower or "youtu.be" in url_lower:
+        if ("youtube.com" in url_lower or "youtu.be" in url_lower) and not _local_mode():
             source_id = self._stable_id(source_url)
             out_path = self.output_dir / f"{source_id}.mp4"
             # 1. Playwright-driven converter site
@@ -217,6 +225,21 @@ def _youtube_extractor_args(source_url: str) -> dict:
     url = (source_url or "").lower()
     if not ("youtube.com" in url or "youtu.be" in url):
         return {}
+    if _local_mode():
+        # Residential IP + cookies + bgutil-pot PO Tokens + Node for n-sig
+        # JS challenge.  Even with PO tokens YouTube forces SABR streaming
+        # on `web_safari` / `tv`; mweb + web_creator return plain DASH
+        # formats with PO tokens, but downloading them needs n-sig
+        # decoding, which requires a JS runtime (Node >= 22).
+        return {
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["mweb", "web_creator"],
+                },
+            },
+            "js_runtimes": {"node": {}},
+            "verbose": True,
+        }
     return {
         "extractor_args": {
             "youtube": {
