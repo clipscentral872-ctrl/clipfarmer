@@ -47,4 +47,6 @@ tar -xzf "$TMP/state.tar.gz" -C "$REPO_DIR"
 
 mkdir -p .auth data logs
 log "state pulled — DB rows: $(sqlite3 data/clipfarmer.db 'SELECT COUNT(*) FROM campaigns' 2>/dev/null || echo 'n/a')"
+log "DEBUG DB file: $(ls -la data/clipfarmer.db 2>&1)"
+log "DEBUG DB tables: $(python3 -c "import sqlite3; c=sqlite3.connect('data/clipfarmer.db'); print(sorted([r[0] for r in c.execute('SELECT name FROM sqlite_master WHERE type=\"table\"').fetchall()]))" 2>&1)"
 rm -rf "$TMP"
