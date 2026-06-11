@@ -46,7 +46,27 @@ log "extracting into $REPO_DIR"
 tar -xzf "$TMP/state.tar.gz" -C "$REPO_DIR"
 
 mkdir -p .auth data logs
-log "state pulled — DB rows: $(sqlite3 data/clipfarmer.db 'SELECT COUNT(*) FROM campaigns' 2>/dev/null || echo 'n/a')"
-log "DEBUG DB file: $(ls -la data/clipfarmer.db 2>&1)"
-log "DEBUG DB tables: $(python3 -c "import sqlite3; c=sqlite3.connect('data/clipfarmer.db'); print(sorted([r[0] for r in c.execute('SELECT name FROM sqlite_master WHERE type=\"table\"').fetchall()]))" 2>&1)"
+
+# Write a row-count watermark — state_push will refuse to push state that
+# regresses any table.  This is the safety net against the state-corruption
+# bug where a failed workflow's `if: always()` push wipes good state.
+python3 - <<'PY' || true
+import json, sqlite3, os
+counts = {}
+try:
+    c = sqlite3.connect("data/clipfarmer.db")
+    for tbl in ("campaigns", "clips", "posts", "submissions", "analytics", "source_videos"):
+        try:
+            counts[tbl] = c.execute(f"SELECT COUNT(*) FROM {tbl}").fetchone()[0]
+        except sqlite3.OperationalError:
+            counts[tbl] = 0
+    c.close()
+except Exception as e:
+    print(f"[state-pull] watermark: DB not openable ({e}); writing all-zeroes")
+    counts = {k: 0 for k in ("campaigns", "clips", "posts", "submissions", "analytics", "source_videos")}
+with open(".state_watermark.json", "w") as f:
+    json.dump(counts, f)
+print(f"[state-pull] watermark: {counts}")
+PY
+
 rm -rf "$TMP"

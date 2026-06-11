@@ -37,6 +37,47 @@ if [[ ${#ITEMS[@]} -eq 0 ]]; then
   exit 0
 fi
 
+# Regression check: refuse to push if any tracked table is shorter than the
+# watermark written by state_pull.  Catches the case where a workflow's
+# Python crashed before doing anything productive but `if: always()` still
+# fires Push state — which would otherwise wipe good state from the branch.
+if [[ -f .state_watermark.json && -f data/clipfarmer.db ]]; then
+  REGRESS=$(python3 - <<'PY'
+import json, sqlite3, sys
+try:
+    old = json.load(open(".state_watermark.json"))
+except Exception as e:
+    print(f"OK: no watermark ({e})")
+    sys.exit(0)
+try:
+    c = sqlite3.connect("data/clipfarmer.db")
+except Exception as e:
+    print(f"REGRESS: DB not openable ({e})")
+    sys.exit(0)
+issues = []
+for tbl, old_n in old.items():
+    try:
+        new_n = c.execute(f"SELECT COUNT(*) FROM {tbl}").fetchone()[0]
+    except sqlite3.OperationalError:
+        new_n = 0
+    if new_n < old_n:
+        issues.append(f"{tbl} {old_n}->{new_n}")
+c.close()
+if issues:
+    print("REGRESS: " + ", ".join(issues))
+else:
+    print("OK")
+PY
+)
+  if [[ "$REGRESS" == REGRESS:* ]]; then
+    log "regression detected — REFUSING to push state ($REGRESS)"
+    log "this protects the state branch from the corruption bug; investigate the run that produced this DB"
+    exit 0
+  else
+    log "regression check passed ($REGRESS)"
+  fi
+fi
+
 TMP="$(mktemp -d)"
 log "archiving ${ITEMS[*]}"
 tar -czf "$TMP/state.tar.gz" "${ITEMS[@]}"
