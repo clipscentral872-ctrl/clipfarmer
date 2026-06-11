@@ -22,6 +22,7 @@ import webbrowser
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -46,6 +47,31 @@ def main() -> int:
     repo = Repository()
     data = collect_data(repo)
     html = render(data)
+
+
+# Earnings model — three gates before money actually arrives:
+#   1. Approval gate:   submissions.submission_status in (approved, paid)
+#   2. View threshold:  latest analytics.views >= MIN_VIEWS_FOR_EARNINGS (1000)
+#   3. Community min:   per-campaign accrued $ must hit campaigns.min_payout_threshold
+#      before the balance is actually withdrawable.
+# Anything that misses gate 1 or 2 is $0.  Anything that passes 1+2 but not 3
+# accrues but isn't payable yet.
+MIN_VIEWS_FOR_EARNINGS = 1000
+DEFAULT_MIN_PAYOUT_USD = 20.0    # conservative default when a campaign hasn't declared its threshold
+
+
+def _gate_state(submission: Optional[dict], views: int) -> str:
+    """Return one of: 'pending', 'rejected', 'under_1k', 'earning', 'paid'."""
+    status = (submission or {}).get("submission_status") or "pending"
+    if status == "rejected":
+        return "rejected"
+    if status == "paid":
+        return "paid"
+    if status not in ("approved", "paid"):
+        return "pending"      # null / pending / submitted / unknown
+    if views < MIN_VIEWS_FOR_EARNINGS:
+        return "under_1k"
+    return "earning"
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -107,7 +133,15 @@ def collect_data(repo: Repository) -> dict:
         if a["post_id"] not in latest_by_post:
             latest_by_post[a["post_id"]] = a
 
-    # Per-platform totals
+    # Lookups for gate logic.
+    sub_by_post = {s["post_id"]: s for s in submissions}
+    min_payout_by_campaign = {
+        c["id"]: (c.get("min_payout_threshold") if c.get("min_payout_threshold") not in (None, 0) else DEFAULT_MIN_PAYOUT_USD)
+        for c in campaigns
+    }
+
+    # Per-platform totals — `earnings_est_usd` is now post-gate (only counts
+    # approved-AND-≥1000-views posts; everything else is $0).
     platform_totals = defaultdict(lambda: {"posts": 0, "views": 0, "earnings_est_usd": 0.0})
     per_campaign = defaultdict(lambda: {
         "posts": 0, "views": 0, "earnings_est_usd": 0.0, "title": "",
@@ -115,12 +149,32 @@ def collect_data(repo: Repository) -> dict:
     })
     revenue_by_day: dict[str, float] = defaultdict(float)
 
+    # Bucket counts/sums per gate state, for the new KPI cards.
+    bucket_counts = defaultdict(int)              # state -> post count
+    pending_potential_usd = 0.0                   # what pending clips WOULD earn if approved + over 1k now
+    under_1k_views_needed = 0                     # total extra views the under-1k bucket needs to start earning
+    earning_usd_per_campaign: dict[int, float] = defaultdict(float)
+    paid_usd_total = 0.0
+
     for post in posts:
         platform = post["platform"]
         a = latest_by_post.get(post["id"])
         views = (a or {}).get("views") or 0
         cpm = post.get("payout_per_1k_views") or 0.0
-        earnings = (views / 1000.0) * cpm if cpm else 0.0
+        sub = sub_by_post.get(post["id"])
+        state = _gate_state(sub, views)
+
+        # Only "earning" or "paid" posts contribute toward the totals.
+        earnings = (views / 1000.0) * cpm if (state in ("earning", "paid") and cpm) else 0.0
+        potential = (views / 1000.0) * cpm if cpm else 0.0
+
+        bucket_counts[state] += 1
+        if state == "pending":
+            pending_potential_usd += potential
+        elif state == "under_1k":
+            under_1k_views_needed += max(0, MIN_VIEWS_FOR_EARNINGS - views)
+        elif state == "paid":
+            paid_usd_total += (sub or {}).get("payout_amount") or 0.0
 
         platform_totals[platform]["posts"] += 1
         platform_totals[platform]["views"] += views
@@ -133,14 +187,26 @@ def collect_data(repo: Repository) -> dict:
             per_campaign[cid]["posts"] += 1
             per_campaign[cid]["views"] += views
             per_campaign[cid]["earnings_est_usd"] += earnings
+            if state == "earning":
+                earning_usd_per_campaign[cid] += earnings
 
-        if post.get("posted_at"):
+        if post.get("posted_at") and earnings > 0:
             day = post["posted_at"][:10]
             revenue_by_day[day] += earnings
 
     total_views = sum(d["views"] for d in platform_totals.values())
     total_earnings_usd = sum(d["earnings_est_usd"] for d in platform_totals.values())
     total_earnings_zar = total_earnings_usd * ZAR_PER_USD
+
+    # Community-min gate: split per-campaign earnings into payable-now vs accrued.
+    payable_usd_total = 0.0
+    accrued_usd_total = 0.0
+    for cid, earned in earning_usd_per_campaign.items():
+        min_payout = min_payout_by_campaign.get(cid, DEFAULT_MIN_PAYOUT_USD)
+        if earned >= min_payout:
+            payable_usd_total += earned
+        else:
+            accrued_usd_total += earned
 
     # 7-day revenue series
     today = datetime.now(timezone.utc).date()
@@ -162,36 +228,51 @@ def collect_data(repo: Repository) -> dict:
         posted = sum(1 for p in posts if p.get("status") == "posted")
         post_success_rate = round(100.0 * posted / len(posts), 1)
 
+    # Real approval rate: of submitted clips, what fraction were approved/paid
+    # (vs pending/rejected).  Submissions without a decision yet aren't in the
+    # denominator — they're undecided, not failures.
     approval_rate = 0
-    if clips:
-        # Crude: clips that ended up posted ≈ approved
-        clip_ids_posted = {p["clip_id"] for p in posts if p.get("status") == "posted"}
-        approved = sum(1 for c in clips if c["id"] in clip_ids_posted)
-        approval_rate = round(100.0 * approved / len(clips), 1)
+    decided_subs = [s for s in submissions
+                    if (s.get("submission_status") or "") in ("approved", "paid", "rejected")]
+    if decided_subs:
+        approved = sum(1 for s in decided_subs
+                       if s["submission_status"] in ("approved", "paid"))
+        approval_rate = round(100.0 * approved / len(decided_subs), 1)
 
-    top_posts = sorted(
-        [
-            {
-                "id": p["id"],
-                "platform": p["platform"],
-                "campaign": p.get("campaign_title") or "",
-                "title": (p.get("caption_text") or "").split("\n", 1)[0][:80],
-                "url": p.get("post_url"),
-                "views": (latest_by_post.get(p["id"]) or {}).get("views") or 0,
-                "earnings_zar": round((((latest_by_post.get(p["id"]) or {}).get("views") or 0)
-                                      / 1000.0) * (p.get("payout_per_1k_views") or 0) * ZAR_PER_USD, 2),
-            }
-            for p in posts
-        ],
-        key=lambda r: r["views"],
-        reverse=True,
-    )[:10]
+    def _top_row(p: dict) -> dict:
+        v = (latest_by_post.get(p["id"]) or {}).get("views") or 0
+        cpm = p.get("payout_per_1k_views") or 0
+        state = _gate_state(sub_by_post.get(p["id"]), v)
+        earned = (v / 1000.0) * cpm if state in ("earning", "paid") else 0.0
+        return {
+            "id": p["id"],
+            "platform": p["platform"],
+            "campaign": p.get("campaign_title") or "",
+            "title": (p.get("caption_text") or "").split("\n", 1)[0][:80],
+            "url": p.get("post_url"),
+            "views": v,
+            "state": state,
+            "earnings_zar": round(earned * ZAR_PER_USD, 2),
+        }
+    top_posts = sorted([_top_row(p) for p in posts], key=lambda r: r["views"], reverse=True)[:10]
 
     return {
         "generated_at": now.isoformat(timespec="seconds"),
         "summary": {
-            "total_revenue_zar": round(total_earnings_zar, 2),
-            "total_revenue_usd": round(total_earnings_usd, 2),
+            # Earnings buckets — gated.  See _gate_state and the 3-gate rule.
+            "earning_now_zar": round(total_earnings_zar, 2),     # approved + ≥1k views, all communities
+            "earning_now_usd": round(total_earnings_usd, 2),
+            "payable_zar": round(payable_usd_total * ZAR_PER_USD, 2),  # earning AND past community min
+            "accrued_not_payable_zar": round(accrued_usd_total * ZAR_PER_USD, 2),
+            "paid_out_zar": round(paid_usd_total * ZAR_PER_USD, 2),
+            "pending_potential_zar": round(pending_potential_usd * ZAR_PER_USD, 2),
+            "under_1k_count": bucket_counts.get("under_1k", 0),
+            "under_1k_views_needed": under_1k_views_needed,
+            "pending_count": bucket_counts.get("pending", 0),
+            "rejected_count": bucket_counts.get("rejected", 0),
+            "earning_count": bucket_counts.get("earning", 0),
+            "paid_count": bucket_counts.get("paid", 0),
+            # Costs / balances (unchanged).
             "claude_pro_monthly_zar": CLAUDE_PRO_MONTHLY_ZAR,
             "api_balance_usd": API_BALANCE_USD,
             "api_balance_warning": (API_BALANCE_USD is not None and API_BALANCE_USD <= 3.0),
@@ -311,19 +392,42 @@ _TEMPLATE = r"""<!doctype html>
   <div class="container">
     <div class="grid">
       <div class="card">
-        <div class="label">Total revenue (est.)</div>
-        <div class="num" id="kpi-revenue">R0.00</div>
-        <div class="sub">From cached view counts × CPM</div>
+        <div class="label">Payable now</div>
+        <div class="num" id="kpi-payable">R0.00</div>
+        <div class="sub">Approved · ≥1k views · over community min</div>
+      </div>
+      <div class="card">
+        <div class="label">Earning (accrued)</div>
+        <div class="num" id="kpi-accrued">R0.00</div>
+        <div class="sub">Below community min — not payable yet</div>
+      </div>
+      <div class="card">
+        <div class="label">Paid out</div>
+        <div class="num" id="kpi-paid">R0.00</div>
+        <div class="sub">Historical payouts received</div>
+      </div>
+      <div class="card">
+        <div class="label">Pending approval</div>
+        <div class="num" id="kpi-pending-count">0</div>
+        <div class="sub">Potential <span id="kpi-pending-zar">R0.00</span> if approved + ≥1k views</div>
+      </div>
+    </div>
+
+    <div class="grid" style="margin-top:18px;">
+      <div class="card">
+        <div class="label">Under 1k views</div>
+        <div class="num" id="kpi-under1k">0</div>
+        <div class="sub"><span id="kpi-under1k-views"></span> more views needed to start earning</div>
+      </div>
+      <div class="card">
+        <div class="label">Approval rate</div>
+        <div class="num" id="kpi-approval">0%</div>
+        <div class="sub">Of decided submissions only</div>
       </div>
       <div class="card">
         <div class="label">Net profit (est.)</div>
         <div class="num" id="kpi-profit">R0.00</div>
-        <div class="sub">Revenue − Claude Pro (R<span id="pro-cost"></span>/mo)</div>
-      </div>
-      <div class="card">
-        <div class="label">Total spend</div>
-        <div class="num" id="kpi-spend">R<span id="pro-cost2"></span></div>
-        <div class="sub">Claude Pro membership (API spend not yet wired)</div>
+        <div class="sub">Payable + paid − Claude Pro (R<span id="pro-cost"></span>/mo)</div>
       </div>
       <div class="card">
         <div class="label">API balance (Anthropic)</div>
@@ -462,8 +566,16 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
 // ---------------------- OVERVIEW ----------------------
 (function overview() {
   const s = DATA.summary;
-  document.getElementById('kpi-revenue').textContent = fmtZAR(s.total_revenue_zar);
-  document.getElementById('kpi-profit').textContent = fmtZAR(s.total_revenue_zar - s.claude_pro_monthly_zar);
+  document.getElementById('kpi-payable').textContent = fmtZAR(s.payable_zar);
+  document.getElementById('kpi-accrued').textContent = fmtZAR(s.accrued_not_payable_zar);
+  document.getElementById('kpi-paid').textContent = fmtZAR(s.paid_out_zar);
+  document.getElementById('kpi-pending-count').textContent = fmtNum(s.pending_count);
+  document.getElementById('kpi-pending-zar').textContent = fmtZAR(s.pending_potential_zar);
+  document.getElementById('kpi-under1k').textContent = fmtNum(s.under_1k_count);
+  document.getElementById('kpi-under1k-views').textContent = fmtNum(s.under_1k_views_needed);
+  document.getElementById('kpi-approval').textContent = (DATA.system.approval_rate_pct || 0) + '%';
+  const realised = s.payable_zar + s.paid_out_zar;
+  document.getElementById('kpi-profit').textContent = fmtZAR(realised - s.claude_pro_monthly_zar);
   document.getElementById('pro-cost').textContent = s.claude_pro_monthly_zar;
   document.getElementById('pro-cost2').textContent = s.claude_pro_monthly_zar.toFixed(2);
   document.getElementById('kpi-balance').textContent = s.api_balance_usd != null ? ("$" + s.api_balance_usd.toFixed(2)) : "—";
@@ -472,13 +584,13 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
     type: 'bar',
     data: {
       labels: DATA.revenue_7d.labels.map(d => d.slice(5)),
-      datasets: [{ label: 'Revenue (R)', data: DATA.revenue_7d.values_zar, backgroundColor: '#ff7a28' }]
+      datasets: [{ label: 'Earnings (R)', data: DATA.revenue_7d.values_zar, backgroundColor: '#ff7a28' }]
     },
     options: { plugins: { legend: { display: false } }, scales: { y: { ticks: { color: '#9ea3c8' } }, x: { ticks: { color: '#9ea3c8' } } } }
   });
   const sum7 = DATA.revenue_7d.values_zar.reduce((a, b) => a + b, 0);
   document.getElementById('desc-revenue-7d').innerHTML =
-    `Last 7 days: <b>${fmtZAR(sum7)}</b> in estimated revenue from cached view counts.`;
+    `Last 7 days: <b>${fmtZAR(sum7)}</b> from posts that passed approval + 1k-view gates.`;
 
   const tbl = document.getElementById('tbl-top-posts');
   if (!DATA.top_posts.length) {
