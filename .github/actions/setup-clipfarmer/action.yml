@@ -82,14 +82,17 @@ runs:
         fi
         test -f build/generate_once.js && echo "bgutil-pot script ready"
 
-    - name: Flag downloader to use bgutil-pot stack
+    - name: Flag downloader + override ffmpeg path for Linux runner
       shell: bash
       run: |
-        # Tells engine/downloader.py to skip the broken site-driver / pytubefix /
-        # Cobalt fallback chain and go straight to yt-dlp with PO Tokens + Node
-        # n-sig solving + mweb/web_creator clients — the stack that actually
-        # works in 2026.
+        # CLIPFARMER_LOCAL tells engine/downloader.py to skip the broken
+        # site-driver / pytubefix / Cobalt fallback chain and go straight
+        # to yt-dlp with PO Tokens + Node n-sig + mweb/web_creator clients.
         echo "CLIPFARMER_LOCAL=1" >> "$GITHUB_ENV"
+        # .env (uploaded from Chris's laptop) hard-codes a Windows ffmpeg
+        # path.  Override with the system ffmpeg we just apt-installed —
+        # python-dotenv won't clobber a pre-set env var.
+        echo "FFMPEG_PATH=/usr/bin/ffmpeg" >> "$GITHUB_ENV"
 
     - name: Cache Playwright browsers
       if: inputs.install-playwright == 'true'
