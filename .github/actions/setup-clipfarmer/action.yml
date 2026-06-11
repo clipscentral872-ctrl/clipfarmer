@@ -46,6 +46,15 @@ runs:
         # Needs the Node side too (set up below).
         pip install bgutil-ytdlp-pot-provider
 
+    - name: Install ffmpeg (needed for yt-dlp to merge video+audio + for engine clip cuts)
+      shell: bash
+      run: |
+        if ! command -v ffmpeg >/dev/null 2>&1; then
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+        fi
+        ffmpeg -version | head -1
+
     - name: Set up Node.js 22 (for yt-dlp n-sig JS challenge + bgutil-pot)
       uses: actions/setup-node@v4
       with:
