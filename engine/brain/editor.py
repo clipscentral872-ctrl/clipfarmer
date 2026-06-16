@@ -181,7 +181,7 @@ def _ask_claude_to_edit(
     if not settings.anthropic_api_key:
         return None
     try:
-        import anthropic
+        from engine import llm_compat as anthropic
     except ImportError:
         return None
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
@@ -263,7 +263,7 @@ def _ask_claude_to_polish(
     if not settings.anthropic_api_key:
         return None
     try:
-        import anthropic
+        from engine import llm_compat as anthropic
     except ImportError:
         return None
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)

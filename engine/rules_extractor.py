@@ -56,7 +56,7 @@ def extract_rules(
     model = model or settings.anthropic_model
 
     try:
-        import anthropic
+        from engine import llm_compat as anthropic
     except ImportError as e:
         raise RulesExtractionError("anthropic SDK not installed") from e
 

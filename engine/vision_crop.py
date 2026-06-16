@@ -84,7 +84,7 @@ def decide_speaker_crop(
     model = model or settings.anthropic_model
 
     try:
-        import anthropic
+        from engine import llm_compat as anthropic
         client = anthropic.Anthropic(api_key=api_key)
     except Exception as e:
         logger.warning(f"[vis-crop] anthropic SDK unavailable: {e}")

@@ -186,7 +186,7 @@ def _ask_claude_for_experiments(
     if not settings.anthropic_api_key:
         return []
     try:
-        import anthropic
+        from engine import llm_compat as anthropic
     except ImportError:
         return []
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)

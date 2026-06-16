@@ -265,7 +265,7 @@ def _simulate_reviewer(
     if not settings.anthropic_api_key:
         return {"reject_risk": 0.0, "reason": "", "fix": "", "confidence": 0.0}
     try:
-        import anthropic
+        from engine import llm_compat as anthropic
     except ImportError:
         return {"reject_risk": 0.0, "reason": "", "fix": "", "confidence": 0.0}
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
@@ -337,7 +337,7 @@ def _vision_review_clip(video_path: str, brief: Optional[dict], campaign: dict) 
     if not settings.anthropic_api_key:
         return []
     try:
-        import anthropic
+        from engine import llm_compat as anthropic
     except ImportError:
         return []
     from pathlib import Path as _P

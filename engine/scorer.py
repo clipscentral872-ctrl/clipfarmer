@@ -58,7 +58,7 @@ class ClipScorer:
         if self._client is not None:
             return self._client
         try:
-            import anthropic
+            from engine import llm_compat as anthropic
         except ImportError as e:
             raise ScoreError("anthropic SDK not installed") from e
         self._client = anthropic.Anthropic(api_key=self.api_key)

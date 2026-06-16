@@ -108,6 +108,15 @@ class Settings:
     anthropic_api_key: Optional[str] = field(default_factory=lambda: _env("ANTHROPIC_API_KEY"))
     anthropic_model: str = field(default_factory=lambda: _env("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"))
 
+    # --- LLM provider selection -------------------------------------------
+    # `anthropic` (default) keeps Claude. `gemini` routes all engine.llm_compat
+    # callers to Gemini's OpenAI-compatible endpoint at ~5% the cost.
+    llm_provider: str = field(default_factory=lambda: _env("LLM_PROVIDER", "anthropic"))
+
+    # --- Gemini (used when LLM_PROVIDER=gemini) ---------------------------
+    gemini_api_key: Optional[str] = field(default_factory=lambda: _env("GEMINI_API_KEY") or _env("GOOGLE_API_KEY"))
+    gemini_model: str = field(default_factory=lambda: _env("GEMINI_MODEL", "gemini-2.0-flash"))
+
     # --- Whisper -----------------------------------------------------------
     whisper_model: str = field(default_factory=lambda: _env("WHISPER_MODEL", "base"))
     whisper_device: str = field(default_factory=lambda: _env("WHISPER_DEVICE", "cpu"))

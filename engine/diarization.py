@@ -58,7 +58,7 @@ def diarize_transcript(
     if not api_key or not segments:
         return []
     try:
-        import anthropic
+        from engine import llm_compat as anthropic
     except ImportError:
         return []
     client = anthropic.Anthropic(api_key=api_key)

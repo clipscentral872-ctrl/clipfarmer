@@ -50,7 +50,7 @@ class VisionScorer:
     def _get_client(self):
         if self._client is not None:
             return self._client
-        import anthropic
+        from engine import llm_compat as anthropic
         self._client = anthropic.Anthropic(api_key=self.api_key)
         return self._client
 

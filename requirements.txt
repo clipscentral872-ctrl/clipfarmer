@@ -8,6 +8,9 @@ playwright>=1.48
 
 # --- AI ---------------------------------------------------------------
 anthropic>=0.39
+# openai SDK (NOT openai-whisper) — used by engine/llm_compat to hit Gemini's
+# OpenAI-compatible endpoint when LLM_PROVIDER=gemini.
+openai>=1.50
 openai-whisper>=20240930
 # torch is left unpinned so pip can pick a wheel that matches the
 # installed Python version (Python 3.14 needs torch >= 2.5).

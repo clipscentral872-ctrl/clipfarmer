@@ -156,7 +156,7 @@ Return ONLY the search query as plain text on a single line — no quotes, no ex
 Search query:"""
 
     try:
-        import anthropic
+        from engine import llm_compat as anthropic
         client = anthropic.Anthropic(api_key=api_key)
         resp = client.messages.create(
             model=settings.anthropic_model,
@@ -279,7 +279,7 @@ AVOID:
 Return ONLY a JSON object: {{"index": N, "reason": "one short sentence"}}. If none are usable, return {{"index": -1, "reason": "..."}}."""
 
     try:
-        import anthropic
+        from engine import llm_compat as anthropic
         client = anthropic.Anthropic(api_key=api_key)
         resp = client.messages.create(
             model=settings.anthropic_model,

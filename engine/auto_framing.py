@@ -72,7 +72,7 @@ def count_subjects(
     if not api_key:
         return None
     try:
-        import anthropic
+        from engine import llm_compat as anthropic
     except ImportError:
         return None
 
@@ -159,7 +159,7 @@ def decide_group_bbox(
     if not api_key:
         return None
     try:
-        import anthropic
+        from engine import llm_compat as anthropic
     except ImportError:
         return None
 

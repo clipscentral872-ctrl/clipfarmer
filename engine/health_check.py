@@ -113,7 +113,7 @@ def check_anthropic() -> HealthResult:
                             "ANTHROPIC_API_KEY missing from .env",
                             "Add ANTHROPIC_API_KEY=sk-ant-... to .env")
     try:
-        import anthropic
+        from engine import llm_compat as anthropic
     except ImportError:
         return HealthResult("Anthropic API", False,
                             "anthropic SDK not installed",

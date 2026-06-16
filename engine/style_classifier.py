@@ -73,7 +73,7 @@ def classify_clip(
         return None
 
     try:
-        import anthropic
+        from engine import llm_compat as anthropic
     except ImportError:
         logger.warning("[style] anthropic SDK missing")
         return None
