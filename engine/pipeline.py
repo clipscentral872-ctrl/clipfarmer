@@ -150,16 +150,28 @@ class EnginePipeline:
         raw_path = clips_dir / f"{source_id}__{idx:02d}__raw.mp4"
         vert_path = clips_dir / f"{source_id}__{idx:02d}__vert.mp4"
         srt_path = clips_dir / f"{source_id}__{idx:02d}.srt"
+        ass_path = clips_dir / f"{source_id}__{idx:02d}.ass"
         final_path = clips_dir / f"{source_id}__{idx:02d}__final.mp4"
 
         self.cutter.cut(video_path, moment.start_sec, moment.end_sec, raw_path)
         self.formatter.to_vertical(raw_path, vert_path, mode=format_mode)
-        # Pass diarized speakers to captioner so podcast clips get
-        # "[Ashlee Vance] ..." style speaker-prefixed captions when speaker
-        # changes. No-op when diarize was off (None).
-        self.captioner.build_srt(
-            segments, moment.start_sec, srt_path,
-            diarized=getattr(self, "_diarized", None),
-        )
-        self.captioner.burn(vert_path, srt_path, moment.hook_text, final_path)
+
+        # OpusClip-style word-by-word "karaoke" captions when we have word-level
+        # timings; otherwise fall back to plain line captions. The hook overlay
+        # is burned on top either way.
+        ass_built = None
+        try:
+            ass_built = self.captioner.build_ass(segments, moment.start_sec, ass_path)
+        except Exception as e:
+            logger.warning(f"[engine] karaoke caption build failed, using line captions: {e}")
+        if ass_built is not None:
+            self.captioner.burn_ass(vert_path, ass_path, moment.hook_text, final_path)
+        else:
+            # Pass diarized speakers so podcast clips get "[Ashlee Vance] ..."
+            # speaker-prefixed captions when the speaker changes (None = off).
+            self.captioner.build_srt(
+                segments, moment.start_sec, srt_path,
+                diarized=getattr(self, "_diarized", None),
+            )
+            self.captioner.burn(vert_path, srt_path, moment.hook_text, final_path)
         return ProducedClip(moment=moment, raw_path=raw_path, vertical_path=vert_path, final_path=final_path)

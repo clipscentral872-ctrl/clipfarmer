@@ -25,6 +25,10 @@ class TranscriptSegment:
     start: float
     end: float
     text: str
+    # Word-level timings [{word, start, end}, ...] in absolute source time.
+    # Powers OpusClip-style word-by-word "karaoke" captions. None on older
+    # cached transcripts (we fall back to line captions then).
+    words: Optional[List[dict]] = None
 
 
 class Transcriber:
@@ -56,12 +60,25 @@ class Transcriber:
             verbose=False,
             fp16=fp16,
             condition_on_previous_text=False,
+            word_timestamps=True,
         )
-        segs = [
-            TranscriptSegment(start=float(s["start"]), end=float(s["end"]), text=s["text"].strip())
-            for s in result.get("segments", [])
-            if s.get("text")
-        ]
+        segs = []
+        for s in result.get("segments", []):
+            if not s.get("text"):
+                continue
+            words = None
+            if s.get("words"):
+                words = [
+                    {"word": str(w.get("word", "")).strip(), "start": float(w["start"]), "end": float(w["end"])}
+                    for w in s["words"]
+                    if w.get("word") and w.get("start") is not None and w.get("end") is not None
+                ]
+                words = [w for w in words if w["word"]] or None
+            segs.append(
+                TranscriptSegment(
+                    start=float(s["start"]), end=float(s["end"]), text=s["text"].strip(), words=words
+                )
+            )
         logger.info(f"[whisper] {len(segs)} segments, total {segs[-1].end if segs else 0:.1f}s")
         return segs
 
