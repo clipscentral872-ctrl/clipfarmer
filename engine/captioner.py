@@ -65,6 +65,95 @@ class Captioner:
         return out_path
 
     # ------------------------------------------------------------------
+    def build_ass(
+        self,
+        segments: List[TranscriptSegment],
+        offset_sec: float,
+        out_path: Path,
+        highlight: str = "&H0026E6FF&",
+        words_per_line: int = 4,
+    ) -> Optional[Path]:
+        """OpusClip-style word-by-word "karaoke" captions: a few big words on
+        screen at once, with the word currently being spoken popped in a bright
+        highlight colour. Returns None when the transcript carries no word-level
+        timings (the caller then falls back to plain line captions)."""
+        # Flatten words inside the clip window, shifted to clip-local time.
+        flat: list[tuple[float, float, str]] = []
+        for s in segments:
+            for w in (s.words or []):
+                ws = w["start"] - offset_sec
+                we = w["end"] - offset_sec
+                if we <= 0:
+                    continue
+                txt = str(w["word"]).strip()
+                if txt:
+                    flat.append((max(0.0, ws), we, txt))
+        if not flat:
+            return None
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        events: list[str] = []
+        for i in range(0, len(flat), words_per_line):
+            group = flat[i : i + words_per_line]
+            for j, (ws, we, _) in enumerate(group):
+                start = ws
+                end = group[j + 1][0] if j + 1 < len(group) else we
+                if end <= start:
+                    end = start + 0.12
+                parts = []
+                for k, (_, _, t) in enumerate(group):
+                    safe = t.replace("{", "(").replace("}", ")")
+                    if k == j:
+                        parts.append(f"{{\\c{highlight}}}{safe}{{\\c&H00FFFFFF&}}")
+                    else:
+                        parts.append(safe)
+                events.append(
+                    f"Dialogue: 0,{_fmt_ass(start)},{_fmt_ass(end)},Caption,,0,0,0,,{' '.join(parts)}"
+                )
+
+        out_path.write_text(_ASS_HEADER + "\n".join(events) + "\n", encoding="utf-8")
+        return out_path
+
+    # ------------------------------------------------------------------
+    def burn_ass(
+        self, in_path: Path, ass_path: Path, hook_text: str, out_path: Path, hook_duration: float = 3.0
+    ) -> Path:
+        """Burn ASS karaoke captions (own styling) then the hook overlay."""
+        if not in_path.exists():
+            raise CaptionError(f"input not found: {in_path}")
+        if not ass_path.exists():
+            raise CaptionError(f"ass not found: {ass_path}")
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_with_subs = out_path.with_name(out_path.stem + "__subs.mp4")
+        try:
+            self._burn_ass_subs(in_path, ass_path, tmp_with_subs)
+            self._burn_hook(tmp_with_subs, hook_text, hook_duration, out_path)
+        finally:
+            if tmp_with_subs.exists():
+                try:
+                    tmp_with_subs.unlink()
+                except Exception:
+                    pass
+        return out_path
+
+    def _burn_ass_subs(self, in_path: Path, ass_path: Path, out_path: Path) -> None:
+        ass_arg = str(ass_path).replace("\\", "/").replace(":", "\\:")
+        vf = f"subtitles='{ass_arg}'"  # ASS carries its own styling
+        cmd = [
+            self.ffmpeg, "-y",
+            "-i", str(in_path),
+            "-vf", vf,
+            "-c:v", "libx264", "-preset", "medium", "-crf", "19",
+            "-c:a", "copy",
+            "-movflags", "+faststart",
+            str(out_path),
+        ]
+        logger.info(f"[caption] ass karaoke pass: {in_path.name} → {out_path.name}")
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            raise CaptionError(f"ass burn failed:\n{r.stderr[-3000:]}")
+
+    # ------------------------------------------------------------------
     def burn(
         self,
         in_path: Path,
@@ -265,6 +354,37 @@ def _fmt_srt(t: float) -> str:
     minutes, seconds = divmod(remainder, 60)
     ms = int((seconds - int(seconds)) * 1000)
     return f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d},{ms:03d}"
+
+
+def _fmt_ass(t: float) -> str:
+    """ASS timestamp: H:MM:SS.cc (centiseconds)."""
+    if t < 0:
+        t = 0.0
+    h = int(t // 3600)
+    m = int((t % 3600) // 60)
+    s = t % 60
+    return f"{h:d}:{m:02d}:{s:05.2f}"
+
+
+# Big bold white captions, thick black outline, centred in the lower-middle
+# (clear of the TikTok/IG bottom UI). The active word is recoloured inline via
+# {\c&H..&} overrides in build_ass — that's the OpusClip word-pop look.
+_ASS_HEADER = (
+    "[Script Info]\n"
+    "ScriptType: v4.00+\n"
+    "PlayResX: 1080\n"
+    "PlayResY: 1920\n"
+    "WrapStyle: 2\n"
+    "ScaledBorderAndShadow: yes\n\n"
+    "[V4+ Styles]\n"
+    "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
+    "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+    "Alignment, MarginL, MarginR, MarginV, Encoding\n"
+    "Style: Caption,Arial,84,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,"
+    "-1,0,0,0,100,100,0,0,1,6,0,2,80,80,560,1\n\n"
+    "[Events]\n"
+    "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+)
 
 
 def _ff_escape(s: str) -> str:
